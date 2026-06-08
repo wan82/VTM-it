@@ -34,7 +34,7 @@ LOGDIR  ?= Data/Log/FastTest
 MODEL   ?= Data/ModelResults/qtForest.bin
 
 .DEFAULT_GOAL := help
-.PHONY: help all build extract merge data train fastTest analyze mttLabel clean distclean
+.PHONY: help all build extract merge data train fastTest analyze mttLabel mttFeature clean distclean
 
 help:
 	@echo "VTM-it 顶层命令（在根目录直接用）："
@@ -43,6 +43,7 @@ help:
 	@echo "  make merge     汇总：特征 × labelCtu → Data/TrainingData/Training.csv"
 	@echo "  make data      extract + merge"
 	@echo "  make mttLabel  解码 binEncode202 → 采样 MTT 划分标签 → Data/labelMtt"
+	@echo "  make mttFeature labelMtt × 源YUV → 块特征 → Data/TrainingData/TrainingMtt.csv"
 	@echo "  make train     训练→模型 qtForest.bin→Data/ModelResults；报告→Report/ModelTraining"
 	@echo "  make all       data + train（全流程）"
 	@echo "  make fastTest  编译VTM并对BQSquare编码33帧(QP22/27/32/37)，日志→Data/Log/FastTest"
@@ -74,6 +75,10 @@ analyze:
 # ---- MTT 标签：解码 binEncode202 采样导出（C++ 模块，自动构建 DecoderApp）----
 mttLabel:
 	$(MAKE) -C $(EXTRACT_DIR) mtt-label
+
+# ---- MTT 块特征：labelMtt × 源YUV → TrainingMtt.csv ----
+mttFeature:
+	$(MAKE) -C $(EXTRACT_DIR) mtt-feature
 
 # ---- 全流程 ----
 all: data train

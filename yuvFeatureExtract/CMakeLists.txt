@@ -18,3 +18,5 @@ add_subdirectory( collector )
 add_subdirectory( merger )
 # MTT 标签编排（解码 binEncode202 → 采样 MTT 划分标签）
 add_subdirectory( mttLabel )
+# MTT 块特征（labelMtt × YUV → TrainingMtt.csv）
+add_subdirectory( mttFeature )

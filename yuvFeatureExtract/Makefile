@@ -4,6 +4,7 @@
 #   make merge      运行合并器：特征 × labelCtu → Training.csv
 #   make data       run + merge 一条龙
 #   make mtt-label  解码 binEncode202 → 采样 MTT 标签 → Data/labelMtt（自动构建 DecoderApp）
+#   make mtt-feature labelMtt × 源YUV → 块特征 → Data/TrainingData/TrainingMtt.csv
 #   make debug      Debug 构建
 #   make clean      删除 build 目录
 
@@ -30,7 +31,10 @@ MTT_CONFIG ?= mttLabel/config/mtt.yaml
 BIN_DIR    ?= $(DATA)/binEncode202
 LABELMTT   ?= $(DATA)/labelMtt
 
-.PHONY: all build run merge data mtt-label debug clean
+# MTT 块特征参数（YUV 信息复用采集器 config；输出 TrainingMtt.csv）
+TRAINING_MTT ?= $(DATA)/TrainingData/TrainingMtt.csv
+
+.PHONY: all build run merge data mtt-label mtt-feature debug clean
 
 all: build
 
@@ -65,6 +69,11 @@ mtt-label: build
 	echo "[mtt-label] 解码器: $$DEC"; \
 	$(BUILD_DIR)/mttLabel/mttLabelBuilder "$(MTT_CONFIG)" \
 		--decoder "$$DEC" --bin-dir "$(BIN_DIR)" --out-dir "$(LABELMTT)"
+
+# MTT 块特征：labelMtt × 源YUV → TrainingMtt.csv（YUV 信息复用采集器 config.yaml）
+mtt-feature: build
+	$(BUILD_DIR)/mttFeature/mttFeatureBuilder "$(CONFIG)" \
+		--labels-dir "$(LABELMTT)" --out "$(TRAINING_MTT)"
 
 debug:
 	$(MAKE) build BUILD_TYPE=Debug

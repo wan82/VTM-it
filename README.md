@@ -125,8 +125,11 @@ make fastTest YUV=/路径/BQSquare_416x240_60.yuv   # 指定 YUV
   采样导出 MTT 划分标签 → `Data/labelMtt/<seq>_QP<qp>.csv`（逐节点 `w/h/qtDepth/mttDepth/splitMode`）。
   熵解码走 VTM 解码器（`#MTTDUMP` 钩子，默认零开销），编排/采样在 `mttLabel/` 模块。详见
   `yuvFeatureExtract/mttLabel/README.md`。
-- 自建函数库在 `libs/`（MiniYaml/YuvGrayLib/SpatialFeatureLib/**MttSampleLib**），
-  采集器在 `collector/`，合并器在 `merger/`，MTT 标签编排在 `mttLabel/`。
+- **MTT 特征**（`make mttFeature`）：给 labelMtt 的每个块配空域特征（②方向性 + ③划分代价代理 +
+  ④形状/QP，块所在 CTU 的 ①复杂度作上下文）→ `Data/TrainingData/TrainingMtt.csv`。详见
+  `yuvFeatureExtract/mttFeature/README.md`。
+- 自建函数库在 `libs/`（MiniYaml/YuvGrayLib/SpatialFeatureLib/**MttSampleLib/MttFeatureLib**），
+  采集器在 `collector/`，合并器在 `merger/`，MTT 标签编排在 `mttLabel/`，MTT 特征在 `mttFeature/`。
 
 ### modelTrain（Python，Makefile + venv）
 读 `Training.csv`，做数据清洗 + 特征筛选，按 QP 分别训练 **朴素贝叶斯/决策树/随机森林**
