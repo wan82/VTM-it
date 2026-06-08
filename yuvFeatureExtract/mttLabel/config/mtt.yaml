@@ -1,0 +1,78 @@
+# mtt.yaml —— MTT 标签编排配置（mttLabelBuilder 读取）
+# 解码 binEncode202 的 RA 码流，按「随机 POC 子集 × 随机 block 比例」采样导出 MTT 划分标签。
+# 熵解码由 VTM DecoderApp 完成；decoder 路径一般由 `make mtt-label` 自动传入（--decoder）。
+
+bin_dir: Data/binEncode202   # 输入码流目录（相对仓库根；make mtt-label 会用绝对路径覆盖）
+out_dir: Data/labelMtt        # 输出标签目录（同上）
+bin_suffix: _RA_str           # bin 命名：<name><suffix><qp>.bin
+qps: 22,27,32,37              # 每序列要解码的基础 QP（各自一个 bin）
+poc_count: 8                  # 每序列随机采样的 POC 个数（<=0 表示全部 POC）
+block_ratio: 0.03            # 每个 MTT 节点被写出的概率（0~1）
+random_seed: 42              # 采样随机种子（结果可复现）
+# decoder: /path/to/DecoderAppStatic   # 可选；留空则由命令行 --decoder 提供
+
+# ============ 序列列表（21 个，frames 取自 collector config / perSequenceCfg）============
+sequences:
+
+  - name: BQMall
+    frames: 600
+
+  - name: BQSquare
+    frames: 600
+
+  - name: BQTerrace
+    frames: 600
+
+  - name: BasketballDrill
+    frames: 500
+
+  - name: BasketballDrive
+    frames: 500
+
+  - name: BasketballPass
+    frames: 500
+
+  - name: BlowingBubbles
+    frames: 500
+
+  - name: Cactus
+    frames: 500
+
+  - name: Campfire
+    frames: 300
+
+  - name: CatRobot
+    frames: 300
+
+  - name: DaylightRoad2
+    frames: 300
+
+  - name: Drums100
+    frames: 300
+
+  - name: Kimono1
+    frames: 240
+
+  - name: ParkScene
+    frames: 240
+
+  - name: PartyScene
+    frames: 500
+
+  - name: RaceHorses
+    frames: 300
+
+  - name: RaceHorsesC
+    frames: 300
+
+  - name: RollerCoaster2
+    frames: 300
+
+  - name: Tango2
+    frames: 294
+
+  - name: ToddlerFountain2
+    frames: 300
+
+  - name: TrafficFlow
+    frames: 300

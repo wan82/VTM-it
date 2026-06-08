@@ -1,0 +1,64 @@
+# ============================================================
+# VTM-it .gitignore
+# 原则：代码/配置/文档/小标签入库；构建产物、虚拟环境、大数据、生成日志不入库。
+# 官方 VTM 源码入库，但其 build/ 产物不入库。
+# ============================================================
+
+# ==== 构建产物（任意层级的 build/ 目录都忽略）====
+# 注意：不要用裸 bin/ 或 lib/——macOS 上 git 默认大小写不敏感(core.ignorecase)，
+#       lib/ 会误伤 VTM 的 source/Lib 整个库源码。构建产物已由 build/ 与扩展名覆盖。
+build/
+*.o
+*.a
+*.so
+*.dylib
+*.out
+*.exe
+# CMake 缓存/中间件
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+.cmake/
+.cache/
+
+# ==== Python 虚拟环境 / 缓存 ====
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# ==== 大数据 / 输入码流（太大，不入库；本地保留）====
+Data/binEncode202/          # VTM 编出的 RA 码流（数百 MB）
+*.bin
+*.yuv                       # 裸 YUV / 重建 YUV（含残留 rec.yuv）
+
+# ==== 生成的中间件 / 训练产物 / 日志（可由流程重生）====
+Data/temp/                  # 采集/合并中间表
+Data/ModelResults/          # 机器产物：qtForest.bin + models/*.json
+Data/TrainingData/Training.csv
+Data/labelMtt/              # 采样导出的 MTT 标签（make mttLabel 重生）
+Data/Log/                   # fastTest 等运行日志
+
+# 说明：以下「成本高但小」的产物默认保留入库，便于直接复现/对照；
+#   如不想入库可自行取消注释：
+# Data/labelCtu/            # QT 标签（解码 binEncode202 得到）
+# Data/LogOriginalEnc/      # 原始编码对照日志
+# Report/                   # 各类报告（含混淆矩阵图）
+
+# ==== 子项目里的临时测试输出 ====
+yuvFeatureExtract/output/   # 采集器无配置时的回退输出目录
+yuvFeatureExtract/outTest/  # 合成自测输出
+
+# ==== 冗余归档 ====
+VVCSoftware_VTM-VTM-20.2.zip   # 官方源码压缩包（已解压，冗余）
+oldFashion/                    # 历史归档（早期内嵌原型 + 退役脚本），不入库
+
+# ==== 系统 / 编辑器 ====
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/          # IDE 配置含机器特定绝对路径，不入库（如需共享可改用 ${workspaceFolder}）

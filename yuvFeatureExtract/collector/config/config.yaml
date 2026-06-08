@@ -1,0 +1,187 @@
+# ============ YUV 特征采集器配置 ============
+# 全局设置（顶层标量）
+output_dir: ../Data/temp/tempYuvFeature   # 相对 yuvFeatureExtract 目录（make run 的 cwd）；供 yuvLabelMerger 合并
+ctu_size: 128                   # CTU 边长（边缘不足直接丢弃）
+internal_bitdepth: 10           # 统一转到的内部位深（对齐 VTM 默认 10bit）
+default_ctu_per_yuv: 200         # 固定条数模式：每个 YUV 默认采样多少条 CTU（可在序列里覆盖）
+default_sample_ratio: 0.03          # 比例模式：>0 时改按“预估可生成×比例”采样（如 0.03 = 3%）。
+                                 #   优先于 default_ctu_per_yuv；=0 时关闭、沿用固定条数。
+random_seed: 42                 # 随机种子（可复现）
+chroma_format: 420              # 默认色度格式 400/420/422/444（用于按帧跳过色度）
+
+# 无用帧自动检测
+detect_useless_frames: true     # 自动排除空白帧/重复帧
+blank_std_threshold: 1.0        # 全帧标准差低于此 → 空白帧
+duplicate_mad_threshold: 0.5    # 与前一有效帧平均绝对差低于此 → 重复帧
+detect_pixel_stride: 8          # 检测时像素抽样步长（越大越快，越小越准）
+
+# ============ 序列列表（21 个，参数取自 perSequenceCfg） ============
+# path 前缀沿用 /Users/w/wan_data/yuv/；frames 取自各 cfg 的 FramesToBeEncoded。
+sequences:
+  - name: BQMall
+    path: /Users/w/wan_data/yuv/BQMall_832x480_60.yuv
+    width: 832
+    height: 480
+    bitdepth: 8
+    framerate: 60
+    frames: 600
+
+  - name: BQSquare
+    path: /Users/w/wan_data/yuv/BQSquare_416x240_60.yuv
+    width: 416
+    height: 240
+    bitdepth: 8
+    framerate: 60
+    frames: 600
+
+  - name: BQTerrace
+    path: /Users/w/wan_data/yuv/BQTerrace_1920x1080_60.yuv
+    width: 1920
+    height: 1080
+    bitdepth: 8
+    framerate: 60
+    frames: 600
+
+  - name: BasketballDrill
+    path: /Users/w/wan_data/yuv/BasketballDrill_832x480_50.yuv
+    width: 832
+    height: 480
+    bitdepth: 8
+    framerate: 50
+    frames: 500
+
+  - name: BasketballDrive
+    path: /Users/w/wan_data/yuv/BasketballDrive_1920x1080_50.yuv
+    width: 1920
+    height: 1080
+    bitdepth: 8
+    framerate: 50
+    frames: 500
+
+  - name: BasketballPass
+    path: /Users/w/wan_data/yuv/BasketballPass_416x240_50.yuv
+    width: 416
+    height: 240
+    bitdepth: 8
+    framerate: 50
+    frames: 500
+
+  - name: BlowingBubbles
+    path: /Users/w/wan_data/yuv/BlowingBubbles_416x240_50.yuv
+    width: 416
+    height: 240
+    bitdepth: 8
+    framerate: 50
+    frames: 500
+
+  - name: Cactus
+    path: /Users/w/wan_data/yuv/Cactus_1920x1080_50.yuv
+    width: 1920
+    height: 1080
+    bitdepth: 8
+    framerate: 50
+    frames: 500
+
+  - name: Campfire
+    path: /Users/w/wan_data/yuv/Campfire_3840x2160_30fps_10bit_420_bt709_videoRange.yuv
+    width: 3840
+    height: 2160
+    bitdepth: 10
+    framerate: 30
+    frames: 300
+
+  - name: CatRobot
+    path: /Users/w/wan_data/yuv/CatRobot_3840x2160_60fps_10bit_420_jvet.yuv
+    width: 3840
+    height: 2160
+    bitdepth: 10
+    framerate: 60
+    frames: 300
+
+  - name: DaylightRoad2
+    path: /Users/w/wan_data/yuv/DaylightRoad2_3840x2160_60fps_10bit_420.yuv
+    width: 3840
+    height: 2160
+    bitdepth: 10
+    framerate: 60
+    frames: 300
+
+  - name: Drums100
+    path: /Users/w/wan_data/yuv/Drums_3840x2160_100fps_10bit_420_jvet.yuv
+    width: 3840
+    height: 2160
+    bitdepth: 10
+    framerate: 100
+    frames: 300
+
+  - name: Kimono1
+    path: /Users/w/wan_data/yuv/Kimono1_1920x1080_24.yuv
+    width: 1920
+    height: 1080
+    bitdepth: 8
+    framerate: 24
+    frames: 240
+
+  - name: ParkScene
+    path: /Users/w/wan_data/yuv/ParkScene_1920x1080_24.yuv
+    width: 1920
+    height: 1080
+    bitdepth: 8
+    framerate: 24
+    frames: 240
+
+  - name: PartyScene
+    path: /Users/w/wan_data/yuv/PartyScene_832x480_50.yuv
+    width: 832
+    height: 480
+    bitdepth: 8
+    framerate: 50
+    frames: 500
+
+  - name: RaceHorses
+    path: /Users/w/wan_data/yuv/RaceHorses_416x240_30.yuv
+    width: 416
+    height: 240
+    bitdepth: 8
+    framerate: 30
+    frames: 300
+
+  - name: RaceHorsesC
+    path: /Users/w/wan_data/yuv/RaceHorses_832x480_30.yuv
+    width: 832
+    height: 480
+    bitdepth: 8
+    framerate: 30
+    frames: 300
+
+  - name: RollerCoaster2
+    path: /Users/w/wan_data/yuv/RollerCoaster2_3840x2160_60fps_10bit_420.yuv
+    width: 3840
+    height: 2160
+    bitdepth: 10
+    framerate: 60
+    frames: 300
+
+  - name: Tango2
+    path: /Users/w/wan_data/yuv/Tango2_3840x2160_60fps_10bit_420.yuv
+    width: 3840
+    height: 2160
+    bitdepth: 10
+    framerate: 60
+    frames: 294
+
+  - name: ToddlerFountain2
+    path: /Users/w/wan_data/yuv/ToddlerFountain2_3840x2160_60fps_10bit_420.yuv
+    width: 3840
+    height: 2160
+    bitdepth: 10
+    framerate: 60
+    frames: 300
+
+  - name: TrafficFlow
+    path: /Users/w/wan_data/yuv/TrafficFlow_3840x2160_30fps_10bit_420_jvet.yuv
+    width: 3840
+    height: 2160
+    bitdepth: 10
+    framerate: 30
+    frames: 300

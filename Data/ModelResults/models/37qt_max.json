@@ -1,0 +1,24 @@
+{
+  "qp": "37qt_max",
+  "baseQp": 37,
+  "model": "DecisionTree",
+  "features": [
+    "Sobel_mean",
+    "Sobel_std",
+    "Lap_std",
+    "std",
+    "Lap_mean",
+    "37QP"
+  ],
+  "classes": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "cv_accuracy": 0.6519,
+  "cv_weighted_f1": 0.6116,
+  "cv_macro_f1": 0.3988,
+  "trained_on_rows": 40836
+}

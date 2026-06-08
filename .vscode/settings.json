@@ -1,0 +1,4 @@
+{
+    "cmake.sourceDirectory": "/Users/w/Documents/Dev/VTM-it/yuvFeatureExtract",
+    "cmake.buildDirectory": "${workspaceFolder}/yuvFeatureExtract/build"
+}
