@@ -1,1 +1,0 @@
-#define WAN_CHANGE 1
