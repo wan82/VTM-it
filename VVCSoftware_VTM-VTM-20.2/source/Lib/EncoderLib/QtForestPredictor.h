@@ -26,9 +26,12 @@ public:
   bool   forceSplitEnabled() const { return m_forceSplit; }// 下界强制分(QT_FOREST_FORCE)
 
   // blk: 128x128 亮度块（必须已缩放到 10bit，与训练一致）；baseQp ∈ {22,27,32,37}；poc 当前帧 POC
+  // l0blk: L0 参考帧同位 128x128 重建块（同样10bit）。非空时算 res_* 残差特征(当前−L0)；
+  //        空则不提供 res_*（若模型用到 res_* 会因缺特征返回 -1）。
   // 返回预测 qt_max（0..）；不可用时返回 -1。conf 回填预测类别的概率(置信度, 0..1)。
   int predictQtMax(const std::vector<std::vector<int>>& blk, int baseQp, int poc,
-                   double* conf = nullptr) const;
+                   double* conf = nullptr,
+                   const std::vector<std::vector<int>>& l0blk = {}) const;
 
   // 直接用已组装好的特征向量预测类别（顺序同模型 featNames，末尾含 QP-value）。
   // 供单元测试与高级调用；不可用返回 -1。conf 回填置信度。

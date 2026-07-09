@@ -15,6 +15,22 @@
 > 约定：块级**不放**①复杂度/能量（均值、std、Laplacian、Sobel 幅值），只在 CTU 级算一次作为上下文；
 > 块级专注「往哪个方向、怎么切」。
 
+### ⑤ 时域残差 `res_*`（`collect_residual: true` 时追加）
+
+在**残差块** `D = 当前块 − L0同位块`（L0[0] 参考 POC = 去掉 POC 最低置位比特）上，重算 ②③ 的核心量再加矩：
+
+| 列 | 说明 |
+|----|------|
+| `res_mean,res_std,res_skew,res_kurt` | 残差**能量/分布**——残差越大→越可能继续划分（深度信号） |
+| `res_dirEx,res_dirEy,res_dirRatio,res_rowMeanVar,res_colMeanVar` | 残差**边的朝向**——决定横分还是竖分 |
+| `res_tbDiff,res_lrDiff,res_ttHDiff,res_ttVDiff` | 残差**划分代理（最关键）**——残差能量落在哪条切线（1:1 还是 1:2:1）→ BT vs TT |
+
+> 为什么 MTT 必须看残差：BT/TT 是 RDO 对**运动补偿残差**的决策，源像素里看不出来（纯空域 MTT 模型失败的根因）。
+> QT 用残差**能量**（矩）就够；MTT 还要残差的**空间分布**（划分代理 `res_*Diff`）。
+>
+> **I 帧自动排除**：I 帧无 L0；按 `IntraPeriod`（显式 `intra_period` > 帧率推 ≥它的最小 `gop_size` 倍数 > `gop_size`）整行丢弃。
+> **源/重建一致性**：离线用源帧 L0，编码器在线用重建帧 reco(L0)，存在量化噪声失配（沿用 QT 的「路线 a」）。
+
 ## 输出
 
 `TrainingMtt.csv` = labelMtt 原列 + 上面的特征列：

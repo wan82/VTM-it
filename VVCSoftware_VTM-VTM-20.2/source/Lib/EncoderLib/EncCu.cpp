@@ -717,15 +717,27 @@ void EncCu::xCompressCU( CodingStructure*& tempCS, CodingStructure*& bestCS, Par
       {
         const CPelBuf orig  = tempCS->picture->getOrigBuf(cuArea.Y());
         const int     shift = 10 - sps2.getBitDepth(ChannelType::LUMA);   // 统一到训练用的10bit
+        auto scale = [&](int v) { return (shift >= 0) ? (v << shift) : (v >> (-shift)); };
         std::vector<std::vector<int>> blk(CTU, std::vector<int>(CTU, 0));
         for (int y = 0; y < CTU; ++y)
-          for (int x = 0; x < CTU; ++x)
+          for (int x = 0; x < CTU; ++x) blk[y][x] = scale(orig.at(x, y));
+
+        // res_* 残差特征：取 L0[0] 参考帧的同位重建块（与离线 L0=POC去最低位比特 一致）。
+        // 注意：离线用源帧 L0、在线用重建帧 reco(L0)，存在量化噪声失配（路线 a，先验证端到端）。
+        std::vector<std::vector<int>> l0blk;
+        if (tempCS->slice->getNumRefIdx(REF_PIC_LIST_0) > 0)
+        {
+          const Picture* refPic = tempCS->slice->getRefPic(REF_PIC_LIST_0, 0);
+          if (refPic)
           {
-            const int v = orig.at(x, y);
-            blk[y][x] = (shift >= 0) ? (v << shift) : (v >> (-shift));
+            const CPelBuf reco = refPic->getRecoBuf(cuArea.Y());
+            l0blk.assign(CTU, std::vector<int>(CTU, 0));
+            for (int y = 0; y < CTU; ++y)
+              for (int x = 0; x < CTU; ++x) l0blk[y][x] = scale(reco.at(x, y));
           }
+        }
         double conf = 0.0;
-        const int pred = qtp.predictQtMax(blk, baseQp, tempCS->slice->getPOC(), &conf);
+        const int pred = qtp.predictQtMax(blk, baseQp, tempCS->slice->getPOC(), &conf, l0blk);
         // 置信度门控：只有预测足够确信才早停；不确信就全搜（保护 BD-rate）
         if (pred >= 0 && conf >= qtp.confThreshold()) { m_qtPredActive = true; m_qtPredDepth = pred; }
       }

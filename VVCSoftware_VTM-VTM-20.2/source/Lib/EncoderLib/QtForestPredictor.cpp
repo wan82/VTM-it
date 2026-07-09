@@ -162,7 +162,8 @@ const QtForestPredictor::Model* QtForestPredictor::modelForQp(int baseQp) const
 }
 
 // ---------------- 推理 ----------------
-int QtForestPredictor::predictQtMax(const Mat& blk, int baseQp, int poc, double* conf) const
+int QtForestPredictor::predictQtMax(const Mat& blk, int baseQp, int poc, double* conf,
+                                    const Mat& l0blk) const
 {
   if (conf) *conf = 0.0;
   if (!m_enabled) return -1;
@@ -179,6 +180,18 @@ int QtForestPredictor::predictQtMax(const Mat& blk, int baseQp, int poc, double*
   Mat lap = laplacian(blk);
   fb["Lap_mean"]=matMean(lap); fb["Lap_std"]=matStd(lap);
   fb["Lap_skew"]=matSkew(lap); fb["Lap_kurt"]=matKurt(lap);
+
+  // res_*：时域残差特征 = 当前块 − L0同位块（与离线采集一致；公式同 SpatialFeatureLib 矩）。
+  // L0 块尺寸需与当前块一致；否则不提供 res_*（模型若用到会因缺特征返回 -1）。
+  if (!l0blk.empty() && l0blk.size() == blk.size() && l0blk[0].size() == blk[0].size())
+  {
+    const int H = (int)blk.size(), W = (int)blk[0].size();
+    Mat res(H, std::vector<int>(W, 0));
+    for (int y = 0; y < H; ++y)
+      for (int x = 0; x < W; ++x) res[y][x] = blk[y][x] - l0blk[y][x];
+    fb["res_mean"]=matMean(res); fb["res_std"]=matStd(res);
+    fb["res_skew"]=matSkew(res); fb["res_kurt"]=matKurt(res);
+  }
 
   // 按模型特征顺序组装输入向量
   std::vector<double> x;

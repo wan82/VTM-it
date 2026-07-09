@@ -68,3 +68,26 @@ Data/ModelResults/
 - Training.csv 里的 `22QP/27QP/32QP/37QP`（QP-value）默认**不进特征集**，以保持 18 个空域特征不变；
   想把匹配的 QP-value 当特征用，告知即可。
 - 想改成二分类（分/不分）或加 QP 作统一特征，告知即可，pipeline 很容易扩展。
+
+## MTT 训练（`trainMtt.py`，与 QT 分开的独立模型）
+
+QT 用 `train.py`，**MTT 单独**用 `trainMtt.py`，互不影响。读 `Data/TrainingData/TrainingMtt.csv`
+（由 `make mttFeature` 生成），预测每个 MTT 节点的 **splitMode 5 分类**：
+
+- 类别码：`NO=0, BTH=1, BTV=2, TTH=3, TTV=4`（C++ 侧据此映射回 PartSplit）。
+- **按基础 QP 分 4 个模型**（22/27/32/37），嵌入时按 baseQP 选，与 QT 一致。
+- 类别**严重不平衡**（NO≈64%），统一用 **balanced 样本权重**，主指标看 **macro-F1 + 逐类 F1 + 混淆矩阵**，
+  不看 accuracy（全猜 NO 就有 64%）。
+- 按序列 GroupKFold(5)；算法级选择只在 **决策树/随机森林** 里挑（4 QP 平均 macro-F1 最高），
+  朴素贝叶斯仅作对照（森林 bin 只存树模型）。
+- 训练时直接导出 `Data/ModelResults/mttForest.bin`（格式 `"QTF1"`，与 `qtForest.bin` 同一套，
+  C++ `QtForestPredictor` 可直接读；已验证 bin 遍历与 sklearn predict 逐样本一致）。
+
+```bash
+make train-mtt          # 或根目录 make trainMtt
+#  → Data/ModelResults/mttForest.bin + mttModels/QP<qp>.json
+#  → Report/MttTraining/{report.md, metrics.csv, figures/cm_QP<qp>_<model>.png}
+```
+
+特征用 `mttFeature` 那 22 列（②方向性 + ③划分代价代理 + ④形状/QP + CTU 级①上下文）；
+默认全用并在报告里给出 MI 排名（不做 wrapper，特征集已是精选的小集合）。

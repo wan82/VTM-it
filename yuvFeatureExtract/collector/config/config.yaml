@@ -9,6 +9,13 @@ default_sample_ratio: 0.03          # 比例模式：>0 时改按“预估可生
 random_seed: 42                 # 随机种子（可复现）
 chroma_format: 420              # 默认色度格式 400/420/422/444（用于按帧跳过色度）
 
+# 时域残差特征（res_*）
+collect_residual: true          # 收集 res_mean/std/skew/kurt = (当前CTU − L0同位CTU) 的统计矩
+gop_size: 32                    # RA GOP 大小，决定 L0 二叉结构 与 默认 IntraPeriod
+                                #   L0[0] 参考 POC = POC 去掉最低置位比特（与 RA cfg 一致）
+                                #   I帧(POC%IntraPeriod==0)无L0→自动排除；IntraPeriod 默认按帧率取≥它的最小GOP倍数，
+                                #   可在序列里写 intra_period: N 显式覆盖（应与编码 binEncode202 时的设置一致）
+
 # 无用帧自动检测
 detect_useless_frames: true     # 自动排除空白帧/重复帧
 blank_std_threshold: 1.0        # 全帧标准差低于此 → 空白帧

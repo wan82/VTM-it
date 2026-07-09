@@ -2,7 +2,8 @@
 #
 #   make            建venv(首次) → 若 Training.csv 存在则训练并出报告
 #   make setup      只建 venv 装依赖
-#   make train      执行训练（同 make all）
+#   make train      执行 QT 训练（同 make all）
+#   make train-mtt  执行 MTT 训练（splitMode 5分类，按QP分4模型 → mttForest.bin）
 #   make clean      删除 venv
 #   make distclean  删除 venv 和 ModelResults 输出
 #
@@ -21,12 +22,16 @@ FOLDS    ?= 5
 SEED     ?= 42
 RFMINLEAF?= 50                    # 限制 RF/DT 规模，模型小而快、可直接嵌入
 
+# MTT 训练参数（独立模型）
+INPUT_MTT  ?= $(DATA)/TrainingData/TrainingMtt.csv
+REPORT_MTT ?= $(ROOT)/Report/MttTraining
+
 # 共享 venv（所有 Python 子项目共用 VTM-it/.venv），每个子项目用各自的标记安装依赖
 VENV  := ../.venv
 PY    := $(VENV)/bin/python
 STAMP := $(VENV)/.req-modeltrain
 
-.PHONY: all train setup clean distclean
+.PHONY: all train train-mtt setup clean distclean
 
 all: train
 
@@ -48,6 +53,16 @@ train: setup
 		echo "[跳过] 找不到 $(INPUT)。请先用合并生成 Training.csv（根目录 make merge）"; \
 	fi
 	@echo "（训练已直接产出 VTM 可读的 $(OUT)/qtForest.bin，无需额外导出步骤）"
+
+# MTT 训练：splitMode 5 分类，按 QP 分 4 模型，直接导出 $(OUT)/mttForest.bin
+train-mtt: setup
+	@if [ -f "$(INPUT_MTT)" ]; then \
+		echo "[MTT训练] $(INPUT_MTT) -> 模型:$(OUT)/mttForest.bin  报告:$(REPORT_MTT)"; \
+		$(PY) trainMtt.py --input "$(INPUT_MTT)" --out "$(OUT)" --report "$(REPORT_MTT)" \
+			--folds $(FOLDS) --seed $(SEED) --rf-min-leaf $(RFMINLEAF); \
+	else \
+		echo "[跳过] 找不到 $(INPUT_MTT)。请先 make mttFeature 生成 TrainingMtt.csv"; \
+	fi
 
 clean:
 	@echo "共享 venv 在 $(VENV)，请用根目录 make distclean 删除"

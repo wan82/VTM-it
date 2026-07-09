@@ -33,7 +33,20 @@ struct SeqCfg {
   std::string name, path;
   int width = 0, height = 0, bitdepth = 8;
   std::string chroma = "420";
+  int framerate = 0;       // 用于推 IntraPeriod
+  int intraPeriod = 0;     // 显式 intra_period（>0 时优先）
 };
+
+// RA GOP 的 L0[0] 参考 POC = 去掉最低置位比特（二叉左父），与 collector/解码器口径一致
+inline int l0PocOf(int poc) { return poc - (poc & (-poc)); }
+
+// IntraPeriod：显式 intra_period > 按帧率取 ≥framerate 的最小 gopSize 倍数 > gopSize
+inline int deriveIntraPeriod(const SeqCfg& s, int gopSize) {
+  if (s.intraPeriod > 0) return s.intraPeriod;
+  if (s.framerate > 0 && gopSize > 0)
+    return ((s.framerate + gopSize - 1) / gopSize) * gopSize;
+  return gopSize > 0 ? gopSize : 1;
+}
 
 // 取一行 CSV 的第 i 个字段（0 起）
 std::string field(const std::string& line, int idx) {
@@ -66,6 +79,29 @@ CtuCtx computeCtuCtx(const sf::Mat& ctu) {
   return c;
 }
 
+// 残差特征列：在残差块 D=(当前块−L0同位块) 上算
+//   · 矩（能量）：res_mean/std/skew/kurt —— 残差大小→是否/多深划分
+//   · 方向性②：res_dirEx/Ey/Ratio/rowMeanVar/colMeanVar —— 残差边的朝向→横/竖
+//   · 划分代理③：res_tbDiff/lrDiff/ttHDiff/ttVDiff —— 残差能量落在哪条切线→BT/TT（最关键）
+std::string residualHeader() {
+  return "res_mean,res_std,res_skew,res_kurt,"
+         "res_dirEx,res_dirEy,res_dirRatio,res_rowMeanVar,res_colMeanVar,"
+         "res_tbDiff,res_lrDiff,res_ttHDiff,res_ttVDiff";
+}
+std::string residualFields(const sf::Mat& cur, const sf::Mat& ref) {
+  const int H = (int)cur.size(), W = H ? (int)cur[0].size() : 0;
+  sf::Mat d(H, std::vector<int>(W, 0));
+  for (int y = 0; y < H; ++y)
+    for (int x = 0; x < W; ++x) d[y][x] = cur[y][x] - ref[y][x];
+  mf::DirFeatures dir = mf::directionalFeatures(d);
+  mf::SplitProxy  sp  = mf::splitProxyFeatures(d);
+  std::ostringstream o;
+  o << sf::mean(d) << ',' << sf::stddev(d) << ',' << sf::skewness(d) << ',' << sf::kurtosis(d) << ','
+    << dir.ex << ',' << dir.ey << ',' << dir.ratio << ',' << dir.rowMeanVar << ',' << dir.colMeanVar << ','
+    << sp.tbDiff << ',' << sp.lrDiff << ',' << sp.ttHDiff << ',' << sp.ttVDiff;
+  return o.str();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -84,6 +120,8 @@ int main(int argc, char** argv) {
   myaml::Document doc = myaml::parseFile(cfgPath);
   if (!doc.ok) { std::cerr << "配置解析失败: " << doc.error << " (" << cfgPath << ")\n"; return 1; }
   const int internalBd = myaml::getInt(doc.globals, "internal_bitdepth", 10);
+  const int gopSize = myaml::getInt(doc.globals, "gop_size", 32);
+  const bool collectResidual = myaml::getBool(doc.globals, "collect_residual", true);
 
   std::vector<SeqCfg> seqs;
   for (const auto& s : doc.sequences) {
@@ -94,6 +132,8 @@ int main(int argc, char** argv) {
     c.height = myaml::getInt(s, "height", 0);
     c.bitdepth = myaml::getInt(s, "bitdepth", 8);
     c.chroma = myaml::getStr(s, "chroma_format", myaml::getStr(s, "chroma", "420"));
+    c.framerate = myaml::getInt(s, "framerate", 0);
+    c.intraPeriod = myaml::getInt(s, "intra_period", 0);
     if (!c.name.empty()) seqs.push_back(c);
   }
   if (seqs.empty()) { std::cerr << "配置里没有 sequences\n"; return 1; }
@@ -104,7 +144,9 @@ int main(int argc, char** argv) {
   // 表头：labelMtt 原列 + 特征列 + CTU 上下文列
   out << "sequence,POC_ID,pos_x,pos_y,w,h,qtDepth,mttDepth,splitMode,QP,"
       << mf::featureHeader() << ","
-      << "ctuMean,ctuStd,ctuLapMean,ctuLapStd,ctuSobelMean,ctuSobelStd\n";
+      << "ctuMean,ctuStd,ctuLapMean,ctuLapStd,ctuSobelMean,ctuSobelStd";
+  if (collectResidual) out << "," << residualHeader();
+  out << "\n";
 
   long grand = 0; int nSeqUsed = 0, nMissing = 0;
   for (const auto& sc : seqs) {
@@ -125,6 +167,7 @@ int main(int argc, char** argv) {
 
     std::unordered_map<int, yg::GrayFrame> frameCache;      // poc -> 亮度帧
     std::unordered_map<uint64_t, CtuCtx>  ctuCache;          // (poc,cx,cy) -> CTU 上下文
+    const int intraPeriod = deriveIntraPeriod(sc, gopSize);  // 用于排除 I 帧（无 L0）
     long seqRows = 0;
 
     for (const auto& f : files) {
@@ -138,6 +181,8 @@ int main(int argc, char** argv) {
         const int baseQp = toInt(field(line, 9));
         if (w <= 0 || h <= 0) continue;
         if (x + w > sc.width || y + h > sc.height) continue; // 越界保护（理论上已被排除）
+        if (collectResidual && intraPeriod > 0 && (poc % intraPeriod) == 0)
+          continue;                                          // I 帧无 L0，整行丢弃
 
         // 取帧（缓存）
         auto it = frameCache.find(poc);
@@ -167,7 +212,25 @@ int main(int argc, char** argv) {
 
         out << line << ',' << mf::featureFields(d, sp, sh) << ','
             << c.mean << ',' << c.std << ',' << c.lapMean << ',' << c.lapStd << ','
-            << c.sobelMean << ',' << c.sobelStd << '\n';
+            << c.sobelMean << ',' << c.sobelStd;
+        if (collectResidual) {
+          // L0 同位块（缓存 L0 帧）；残差 D = 当前块 − L0块
+          const int l0 = l0PocOf(poc);
+          auto li = frameCache.find(l0);
+          if (li == frameCache.end()) {
+            yg::GrayFrame lf;
+            if (reader.readLumaFrame(l0, lf))
+              li = frameCache.emplace(l0, std::move(lf)).first;
+          }
+          if (li != frameCache.end()) {
+            sf::Mat refBlk = cropBlock(li->second, x, y, w, h);
+            out << ',' << residualFields(blk, refBlk);
+          } else {
+            // 读不到 L0（极少数边界），补 0 占位，保持列数一致
+            out << ",0,0,0,0,0,0,0,0,0,0,0,0,0";
+          }
+        }
+        out << '\n';
         ++seqRows;
       }
     }

@@ -11,6 +11,7 @@
 #include "YuvGrayLib/CtuSplitter.h"
 #include "YuvGrayLib/FrameFilter.h"
 #include "SpatialFeatureLib/CtuFeatures.h"
+#include "SpatialFeatureLib/Moments.h"   // res 残差矩特征（mean/std/skew/kurt）复用
 
 #include <algorithm>
 #include <cmath>
@@ -20,11 +21,30 @@
 #include <map>
 #include <random>
 #include <set>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
+
+// RA(GOP=32) 的 L0[0] 参考 POC = 去掉 POC 最低置位比特（二叉树左父）。
+//   已对照 encoder_randomaccess_vtm.cfg 逐项核实：16→0, 24→16, 8→0, 3→2, 7→6, 6→4 ...
+//   I 帧（POC % IntraPeriod == 0，会被排除）不会走到这里。
+static inline int l0PocOf(int poc) { return poc - (poc & (-poc)); }
+
+// res 残差特征：diff = 当前块 − L0块（有符号），取 mean/std/skew/kurt。
+//   顺序与表头 res_mean,res_std,res_skew,res_kurt 一致。
+static std::string residualFields(const sf::Mat& cur, const sf::Mat& ref) {
+    const int H = (int)cur.size(), W = H ? (int)cur[0].size() : 0;
+    sf::Mat diff(H, std::vector<int>(W, 0));
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) diff[y][x] = cur[y][x] - ref[y][x];
+    std::ostringstream o;
+    o << sf::mean(diff) << ',' << sf::stddev(diff) << ','
+      << sf::skewness(diff) << ',' << sf::kurtosis(diff);
+    return o.str();
+}
 
 static std::string baseName(const std::string& path) {
     std::string b = fs::path(path).filename().string();
@@ -40,6 +60,8 @@ struct GlobalCfg {
     double defaultSampleRatio = 0.0;   // >0 时按“预估可生成×比例”采样（优先于固定条数）
     unsigned seed = 42;
     std::string chroma = "420";
+    bool   collectResidual = true;       // 收集 res_*（当前帧−L0帧）残差矩特征
+    int    gopSize = 32;                 // RA GOP 大小（决定 L0 二叉结构与默认 IntraPeriod）
     yg::UselessFrameConfig uf;
 };
 
@@ -68,6 +90,24 @@ static long processSequence(const myaml::KV& s, const GlobalCfg& g) {
     std::vector<int> excluded;
     std::vector<int> usable = yg::detectUsableFrames(reader, frames, g.uf, &excluded);
 
+    // 残差(res)需参考帧 → 排除 I 帧（POC % IntraPeriod == 0，含 POC0；这些帧没有 L0）。
+    //   IntraPeriod：序列显式 intra_period 优先；否则按 CTC 取 ≥帧率 的最小 GOP 倍数；再否则=GOPSize。
+    int intraPeriod = g.gopSize;
+    if (has(s, "intra_period")) intraPeriod = getInt(s, "intra_period", g.gopSize);
+    else if (has(s, "framerate")) {
+        int fr = getInt(s, "framerate", 0);
+        if (fr > 0) intraPeriod = ((fr + g.gopSize - 1) / g.gopSize) * g.gopSize;
+    }
+    if (intraPeriod <= 0) intraPeriod = g.gopSize;
+    long iframesDropped = 0;
+    if (g.collectResidual) {
+        size_t before = usable.size();
+        usable.erase(std::remove_if(usable.begin(), usable.end(),
+                     [intraPeriod](int p){ return p % intraPeriod == 0; }), usable.end());
+        iframesDropped = static_cast<long>(before - usable.size());
+    }
+    if (usable.empty()) { std::cerr << "  [跳过] 排除I帧后无可用帧\n"; return 0; }
+
     int ctusPF = yg::ctusPerFrame(width, height, g.ctuSize);
     long long maxRows = static_cast<long long>(usable.size()) * ctusPF;
 
@@ -95,6 +135,8 @@ static long processSequence(const myaml::KV& s, const GlobalCfg& g) {
     long target = static_cast<long>(std::min<long long>(targetReq, maxRows));
 
     std::cout << "  总帧=" << frames << " 无用帧=" << excluded.size()
+              << (g.collectResidual ? (" I帧(IntraP=" + std::to_string(intraPeriod) + ")排除="
+                                       + std::to_string(iframesDropped)) : std::string())
               << " 可用帧=" << usable.size()
               << " 每帧CTU=" << ctusPF
               << " 预估可生成=" << maxRows
@@ -140,8 +182,21 @@ static long processSequence(const myaml::KV& s, const GlobalCfg& g) {
 
         yg::CtuPos p = ctuList[ci];
         sf::Mat block = gf.extractBlock(p.x, p.y, g.ctuSize);
-        sf::CtuFeatures feat = sf::computeCtuFeatures(block);
-        rows.push_back({frame, p.x, p.y, feat.toCsvFields()});
+        std::string fields = sf::computeCtuFeatures(block).toCsvFields();
+
+        // res：当前块 − L0 同位块（统一10bit）。读不到参考帧则丢弃该样本。
+        if (g.collectResidual) {
+            int l0 = l0PocOf(frame);
+            auto lit = frameCache.find(l0);
+            if (lit == frameCache.end()) {
+                yg::GrayFrame lf;
+                if (!reader.readLumaFrame(l0, lf)) continue;
+                lit = frameCache.emplace(l0, std::move(lf)).first;
+            }
+            sf::Mat refBlock = lit->second.extractBlock(p.x, p.y, g.ctuSize);
+            fields += "," + residualFields(block, refBlock);
+        }
+        rows.push_back({frame, p.x, p.y, fields});
         ++collected;
     }
 
@@ -156,7 +211,9 @@ static long processSequence(const myaml::KV& s, const GlobalCfg& g) {
     std::string outPath = (fs::path(g.outputDir) / (name + ".csv")).string();
     std::ofstream out(outPath);
     if (!out) { std::cerr << "  [错误] 无法写出: " << outPath << "\n"; return 0; }
-    out << "POC_ID,pos_x,pos_y," << sf::CtuFeatures::csvHeader() << "\n";
+    out << "POC_ID,pos_x,pos_y," << sf::CtuFeatures::csvHeader();
+    if (g.collectResidual) out << ",res_mean,res_std,res_skew,res_kurt";
+    out << "\n";
     for (const auto& r : rows)
         out << r.poc << ',' << r.x << ',' << r.y << ',' << r.fields << "\n";
 
@@ -180,6 +237,8 @@ int main(int argc, char** argv) {
     g.defaultSampleRatio = getDouble(doc.globals, "default_sample_ratio", 0.0);
     g.seed             = static_cast<unsigned>(getInt(doc.globals, "random_seed", 42));
     g.chroma           = getStr(doc.globals, "chroma_format", g.chroma);
+    g.collectResidual  = getBool(doc.globals, "collect_residual", true);   // res_* 残差特征
+    g.gopSize          = getInt(doc.globals, "gop_size", 32);
     g.uf.enable               = getBool(doc.globals, "detect_useless_frames", true);
     g.uf.blankStdThreshold    = getDouble(doc.globals, "blank_std_threshold", 1.0);
     g.uf.duplicateMadThreshold= getDouble(doc.globals, "duplicate_mad_threshold", 0.5);

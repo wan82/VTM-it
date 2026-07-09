@@ -111,6 +111,24 @@ make fastTest YUV=/路径/BQSquare_416x240_60.yuv   # 指定 YUV
 
 各子项目仍可单独进入用 `make`（细节见各自的 `README.md`）。
 
+## 嵌入 VTM 编码器（两套预测，正交、可分别开关）
+
+训练出的两个模型都能直接嵌进官方 VTM 20.2 编码器，用环境变量开关：
+
+- **QT 早停**（`qtForest.bin`，`#QTPRED`）：CTU 根预测 QT 最大深度 + 双向早停 + 置信度门控。
+  详见 `VVCSoftware_VTM-VTM-20.2/QTPRED.md`。
+- **MTT 方向剪枝**（`mttForest.bin`，`#MTTPRED`）：在能做 BT/TT 的节点预测 splitMode，确信时剪掉相悖方向的
+  BT/TT（不动 QUAD/不划分）。详见 `VVCSoftware_VTM-VTM-20.2/MTTPRED.md`。
+
+```bash
+export QT_FOREST_MODEL=$(pwd)/Data/ModelResults/qtForest.bin    # 开 QT 早停
+export MTT_FOREST_MODEL=$(pwd)/Data/ModelResults/mttForest.bin  # 开 MTT 剪枝（可单开/同开）
+./VVCSoftware_VTM-VTM-20.2/build/.../EncoderAppStatic -c <RA cfg> -c <seq cfg> -q 32 ...
+```
+
+两套 C++ 推理都与训练侧**逐样本/逐元素一致**（特征字节级一致、森林遍历与 sklearn `predict` 一致）；
+不设对应环境变量即为原版行为。
+
 ## 子项目说明
 
 ### yuvFeatureExtract（C++，CMake + Makefile，按模块运行）
@@ -132,9 +150,12 @@ make fastTest YUV=/路径/BQSquare_416x240_60.yuv   # 指定 YUV
   采集器在 `collector/`，合并器在 `merger/`，MTT 标签编排在 `mttLabel/`，MTT 特征在 `mttFeature/`。
 
 ### modelTrain（Python，Makefile + venv）
-读 `Training.csv`，做数据清洗 + 特征筛选，按 QP 分别训练 **朴素贝叶斯/决策树/随机森林**
-（多分类 qt_max 0–4），用 **GroupKFold(5, 按序列)** 评估，输出完整报告、12 张混淆矩阵，
-并在训练时**直接产出** VTM 可读的森林模型 `qtForest.bin`（每 QP 元数据存 `models/<qp>.json`），可直接嵌入 VTM。
+- **QT**（`make train`，`train.py`）：读 `Training.csv`，数据清洗 + 特征筛选，按 QP 分别训练
+  **朴素贝叶斯/决策树/随机森林**（多分类 qt_max 0–4），**GroupKFold(5, 按序列)** 评估，
+  输出完整报告 + 12 张混淆矩阵，训练时**直接产出** `qtForest.bin`（每 QP 元数据 `models/<qp>.json`）。
+- **MTT**（`make trainMtt`，`trainMtt.py`）：与 QT 分开的独立模型。读 `TrainingMtt.csv`，预测每个 MTT
+  节点的 **splitMode 5 分类**（NO/BTH/BTV/TTH/TTV），按 QP 分 4 模型，balanced 权重 + macro-F1，
+  直接产出 `mttForest.bin`（与 qtForest.bin 同一 bin 格式，C++ 可读）。报告在 `Report/MttTraining`。
 
 ## 关于 VTM 参考软件
 

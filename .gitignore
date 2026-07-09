@@ -70,6 +70,9 @@ oldFashion/
 # 历史归档压缩包（已解压，冗余）
 oldFashion.zip
 
+# ---- 个人学习笔记/教程（不入库）----
+notes/
+
 # ---- 系统 / 编辑器 ----
 .DS_Store
 Thumbs.db

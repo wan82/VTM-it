@@ -59,7 +59,14 @@ make merge LABELS=/path FEATURES=/path TRAINING=/path/Training.csv TEMP_MERGED=/
 6. **采样**：每条样本独立地`随机选一帧 + 随机选一个CTU位置`，按 (帧, 位置) 去重，
    直到达到 `ctu_per_yuv`（默认 10，可在序列里覆盖）。`random_seed` 保证可复现。
 7. **提特征**：对每个采样到的 128×128 块算 18 个空域特征，写一行。
-8. **输出**：`<output_dir>/<name>.csv`，按 (POC, y, x) 排序。
+8. **（可选）时域残差特征 `res_*`**（`collect_residual: true`，默认开）：
+   - 取该块所在帧的 **L0 同位块**相减，算 `res_mean/res_std/res_skew/res_kurt`（4 列，接在 18 空域特征后）。
+   - **L0[0] 参考 POC = 去掉 POC 最低置位比特**（RA GOP32 二叉结构，已对照 cfg 核实：16→0、24→16、3→2…）。
+   - 残差需参考帧，故**自动排除 I 帧**（`POC % IntraPeriod == 0`）；IntraPeriod 默认按帧率取 ≥它的最小 `gop_size` 倍数，可用序列级 `intra_period:` 覆盖（应与编码时一致）。
+   - 排除 I 帧后训练集只含帧间块——这与 QT 模型**只在 inter slice 部署**一致。
+   - ⚠️ **一致性注意**：当前离线用的是 **源帧** L0；编码器在线用的是**重建参考帧** reco(L0)。
+     先用源帧验证「残差有没有用」(weighted-F1)；若有用、要嵌入时，需改用 `binEncode202` 解码出的重建帧做 L0 以对齐。
+9. **输出**：`<output_dir>/<name>.csv`，按 (POC, y, x) 排序。
 
 ## 输出 CSV 列（21 列，对齐 128csv）
 
