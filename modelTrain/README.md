@@ -1,93 +1,113 @@
-# modelTrain —— 训练与评估（Python，Makefile + venv）
+# modelTrain — Training and Evaluation (Python, Makefile + venv)
 
-读取 `TrainingData/Training.csv`，做**数据清洗 + 特征筛选**，按 QP 分别训练
-**朴素贝叶斯 / 决策树 / 随机森林**（多分类 qt_max 0–4），用 **GroupKFold(5, 按序列分组)**
-评估，生成**混淆矩阵图**与**完整 Markdown 报告**。
+Reads `TrainingData/Training.csv`, performs **data cleaning + feature selection**, and trains
+**Naive Bayes / Decision Tree / Random Forest** separately per QP (multi-class qt_max 0–4).
+Models are evaluated with **GroupKFold(5, grouped by sequence)**, and the pipeline produces
+**confusion matrix figures** and a **full Markdown report**.
 
-## 流程
+## Pipeline
 
-1. **数据清洗**：±Inf 视作缺失并连同 NaN 删除（Training.csv 已基本干净，此处兜底）；
-   标签取整为类别；统计重复行（不删）。
-2. **特征筛选**：① 去近常量特征；② 去高相关冗余（|corr| > 阈值，默认 0.95）；
-   ③ 算每个 QP 的互信息做判别力排名；④ **包裹式前向选择**：按互信息排名从 0 个开始逐个加特征，
-   每步用 3 个模型 × 4 个 QP 的平均 Weighted-F1 评估，取**性能达到峰值−容差**的最小特征数为
-   “甜蜜点”，只保留这些特征（剩下的不再加）。`--no-wrapper` 关闭、`--top-k` 直接取前 K。
-3. **训练 + 评估**：对 22/27/32/37 各一套，每套训 NB/DT/RF；
-   **GroupKFold(5)** 以 `sequence` 分组（同一视频整体只进训练或测试，反映对“没见过的视频”的泛化）。
-   取折外预测算准确率 / Macro-F1 / Weighted-F1，并画混淆矩阵。
-4. **产出**：`report.md`（完整报告，含 wrapper 曲线与甜蜜点）、`metrics.csv`、
-   `figures/cm_<QP>_<model>.png`（12 张）、`figures/featureWrapper.png`（特征数-性能曲线）。
+1. **Data cleaning**: ±Inf is treated as missing and dropped together with NaN (Training.csv is
+   already mostly clean; this is a safety net). Labels are rounded to integer classes; duplicate rows
+   are counted (not removed).
+2. **Feature selection**: ① drop near-constant features; ② drop highly correlated redundant features
+   (|corr| > threshold, default 0.95); ③ compute per-QP mutual information to rank discriminative power;
+   ④ **wrapper forward selection**: starting from zero features, add features one at a time in MI
+   order, scoring each step by the mean Weighted-F1 of 3 models × 4 QPs. The smallest feature count
+   whose score reaches **peak − tolerance** is taken as the "sweet spot", and only those features are
+   kept. `--no-wrapper` disables this step; `--top-k` simply takes the top K.
+3. **Training + evaluation**: one set per QP (22/27/32/37), each training NB/DT/RF.
+   **GroupKFold(5)** groups by `sequence` (each video goes entirely to either train or test, measuring
+   generalization to unseen videos). Accuracy / Macro-F1 / Weighted-F1 are computed from out-of-fold
+   predictions, and confusion matrices are plotted.
+4. **Outputs**: `report.md` (full report, including the wrapper curve and sweet spot), `metrics.csv`,
+   `figures/cm_<QP>_<model>.png` (12 figures), and `figures/featureWrapper.png` (feature count vs. performance).
 
-## 运行
+## Usage
 
 ```bash
 cd modelTrain
-make            # 首次自动建 venv 装 sklearn 等；找到 Training.csv 则训练并出报告
+make            # first run creates the venv and installs sklearn etc.; trains and reports if Training.csv is found
 ```
 
-参数可覆盖：
+Parameters can be overridden:
 
 ```bash
-make CORR=0.9 TOPK=10                 # 高相关阈值 / 只取前10个特征
+make CORR=0.9 TOPK=10                 # correlation threshold / keep only the top 10 features
 make INPUT=/path/Training.csv OUT=/path
-# 直接调脚本（更多参数）：
+# Call the script directly (more options):
 ./run.sh --rf-estimators 200 --max-rows 20000 --folds 5
 ```
 
-- 其它目标：`make setup` / `make clean` / `make distclean`。
-- `--max-rows` 随机抽样若干行，便于快速试跑；`--rf-estimators` 控制随机森林树数（默认 100）。
-- wrapper 相关：`--wrapper-tol`（甜蜜点容差，默认 0.003，越小留的特征越多；设 0 取性能峰值点）、
-  `--wrapper-rf` / `--wrapper-folds` / `--wrapper-sample`（搜索时的轻量设置，加速）、`--no-wrapper`（关闭）。
+- Other targets: `make setup` / `make clean` / `make distclean`.
+- `--max-rows` randomly subsamples rows for quick trial runs; `--rf-estimators` sets the number of
+  trees in the random forest (default 100).
+- Wrapper options: `--wrapper-tol` (sweet-spot tolerance, default 0.003; smaller keeps more features,
+  0 takes the performance peak), `--wrapper-rf` / `--wrapper-folds` / `--wrapper-sample` (lightweight
+  settings used during the search, for speed), `--no-wrapper` (disable).
 
-默认路径（相对仓库根，自动按脚本位置推导，换机器无需改）：
-- 输入：`<仓库根>/Data/TrainingData/Training.csv`
-- 模型：`<仓库根>/Data/ModelResults`；报告：`<仓库根>/Report/ModelTraining`
+Default paths (relative to the repo root, derived from the script location, so nothing needs to
+change on a new machine):
+- Input: `<repo root>/Data/TrainingData/Training.csv`
+- Models: `<repo root>/Data/ModelResults`; reports: `<repo root>/Report/ModelTraining`
 
-## 输出
+## Outputs
 
 ```
 Data/ModelResults/
-├── report.md                       完整报告（数据概览/清洗/特征筛选/逐QP模型对比/汇总/最终模型）
-├── metrics.csv                     指标表（QP×模型：acc / cv均值±std / macro-F1 / weighted-F1）
-├── figures/cm_<QP>_<model>.png     12 张混淆矩阵（行=真实，列=预测，含计数与行归一化%）
-├── figures/featureWrapper.png     特征数-性能曲线（标出甜蜜点）
-├── qtForest.bin                   ★ VTM 可读的森林模型（4个QP合一，训练时直接产出）
-└── models/<qp>.json                每QP元数据：模型/特征顺序/类别/CV指标（仅供人看）
+├── qtForest.bin                    ★ VTM-readable forest model (all 4 QPs in one file, produced directly by training)
+└── models/<qp>.json                per-QP metadata: model / feature order / classes / CV metrics (for humans only)
+
+Report/ModelTraining/
+├── report.md                       full report (data overview / cleaning / feature selection / per-QP model comparison / summary / final model)
+├── metrics.csv                     metrics table (QP × model: acc / CV mean ± std / macro-F1 / weighted-F1)
+├── figures/cm_<QP>_<model>.png     12 confusion matrices (rows = true, columns = predicted, with counts and row-normalized %)
+└── figures/featureWrapper.png      feature count vs. performance curve (sweet spot marked)
 ```
 
-> 训练时**直接序列化**出 `qtForest.bin`（不经 joblib、无需转换）。默认 `RFMINLEAF=50` 已限制
-> RF/决策树规模，模型约几 MB。嵌入 VTM 时设 `QT_FOREST_MODEL` 指向该 bin；特征顺序见 `<qp>.json`。
+> `qtForest.bin` is **serialized directly** during training (no joblib, no conversion step). The
+> default `RFMINLEAF=50` bounds the size of the RF/decision trees, so the model is a few MB. To embed
+> it in VTM, point `QT_FOREST_MODEL` at the bin; the feature order is listed in `<qp>.json`.
 
-## 说明
+## Notes
 
-- 多分类 qt_max(0–4) 类别**不均衡**（高 QP 时大量为 0），Macro-F1 会明显低于准确率，属正常；
-  报告里同时给了准确率、Macro-F1、Weighted-F1 以便全面判断。
-- **按序列分组**的交叉验证比随机分层更严格、更接近真实泛化；想看随机分层的乐观上界可另行对比。
-- **模型选择在算法层面**：比较三种算法各自在 4 个 QP 上的平均 Weighted-F1，平均最高者作为最终算法，
-  再用它在每个 QP 各训一个模型保存（保证部署只用一种算法）。
-- Training.csv 里的 `22QP/27QP/32QP/37QP`（QP-value）默认**不进特征集**，以保持 18 个空域特征不变；
-  想把匹配的 QP-value 当特征用，告知即可。
-- 想改成二分类（分/不分）或加 QP 作统一特征，告知即可，pipeline 很容易扩展。
+- The multi-class qt_max (0–4) is **imbalanced** (mostly 0 at high QP), so Macro-F1 is noticeably lower
+  than accuracy, as expected. The report gives accuracy, Macro-F1 and Weighted-F1 together for a
+  complete picture.
+- **Grouping by sequence** in cross-validation is stricter than random stratification and closer to
+  real-world generalization; a random stratified split can be run separately to see the optimistic upper bound.
+- **Model selection is done at the algorithm level**: the three algorithms are compared by their mean
+  Weighted-F1 over the 4 QPs, the best one becomes the final algorithm, and it is then trained once per
+  QP and saved (so deployment uses a single algorithm).
+- The `22QP/27QP/32QP/37QP` (QP-value) columns in Training.csv are **excluded from the feature set** by
+  default, keeping the 18 spatial features unchanged; the matching QP-value can be added as a feature if needed.
+- The pipeline is easy to extend, e.g. to binary classification (split / no split) or to a single
+  model with QP as a shared feature.
 
-## MTT 训练（`trainMtt.py`，与 QT 分开的独立模型）
+## MTT Training (`trainMtt.py`, a separate model independent of QT)
 
-QT 用 `train.py`，**MTT 单独**用 `trainMtt.py`，互不影响。读 `Data/TrainingData/TrainingMtt.csv`
-（由 `make mttFeature` 生成），预测每个 MTT 节点的 **splitMode 5 分类**：
+QT uses `train.py`; **MTT uses its own** `trainMtt.py`, and the two do not affect each other. It reads
+`Data/TrainingData/TrainingMtt.csv` (produced by `make mttFeature`) and predicts the **5-class
+splitMode** of each MTT node:
 
-- 类别码：`NO=0, BTH=1, BTV=2, TTH=3, TTV=4`（C++ 侧据此映射回 PartSplit）。
-- **按基础 QP 分 4 个模型**（22/27/32/37），嵌入时按 baseQP 选，与 QT 一致。
-- 类别**严重不平衡**（NO≈64%），统一用 **balanced 样本权重**，主指标看 **macro-F1 + 逐类 F1 + 混淆矩阵**，
-  不看 accuracy（全猜 NO 就有 64%）。
-- 按序列 GroupKFold(5)；算法级选择只在 **决策树/随机森林** 里挑（4 QP 平均 macro-F1 最高），
-  朴素贝叶斯仅作对照（森林 bin 只存树模型）。
-- 训练时直接导出 `Data/ModelResults/mttForest.bin`（格式 `"QTF1"`，与 `qtForest.bin` 同一套，
-  C++ `QtForestPredictor` 可直接读；已验证 bin 遍历与 sklearn predict 逐样本一致）。
+- Class codes: `NO=0, BTH=1, BTV=2, TTH=3, TTV=4` (the C++ side maps these back to PartSplit).
+- **4 models, one per base QP** (22/27/32/37), selected by baseQP at inference time, same as QT.
+- The classes are **heavily imbalanced** (NO ≈ 64%), so **balanced sample weights** are used throughout,
+  and the main metrics are **macro-F1 + per-class F1 + confusion matrix**, not accuracy (always
+  predicting NO already gives 64%).
+- GroupKFold(5) by sequence; algorithm-level selection only chooses between **Decision Tree / Random
+  Forest** (highest mean macro-F1 over the 4 QPs). Naive Bayes is reported for reference only (the
+  forest bin only stores tree models).
+- Training directly exports `Data/ModelResults/mttForest.bin` (format `"QTF1"`, the same as
+  `qtForest.bin`, readable directly by the C++ `QtForestPredictor`; bin traversal has been verified to
+  match sklearn predict sample-for-sample).
 
 ```bash
-make train-mtt          # 或根目录 make trainMtt
+make train-mtt          # or `make trainMtt` from the repo root
 #  → Data/ModelResults/mttForest.bin + mttModels/QP<qp>.json
 #  → Report/MttTraining/{report.md, metrics.csv, figures/cm_QP<qp>_<model>.png}
 ```
 
-特征用 `mttFeature` 那 22 列（②方向性 + ③划分代价代理 + ④形状/QP + CTU 级①上下文）；
-默认全用并在报告里给出 MI 排名（不做 wrapper，特征集已是精选的小集合）。
+Features are the 22 columns from `mttFeature` (② directionality + ③ split-cost proxies + ④ shape/QP +
+CTU-level ① context). All are used by default, and the report gives their MI ranking (no wrapper step,
+since the feature set is already a small, curated one).

@@ -1,71 +1,78 @@
-# mttLabel —— MTT 划分标签采样导出
+# mttLabel — Sampled Export of MTT Partition Labels
 
-从 `Data/binEncode202/` 的 RA 码流里解出 **MTT（BT/TT）划分**，做成训练标签。
-只采一小部分（随机 POC × 随机 block），避免把上百万个块全导出来。
+Decodes the **MTT (BT/TT) partitions** from the RA bitstreams in `Data/binEncode202/` and turns them
+into training labels. Only a small subset is sampled (random POC × random block), to avoid exporting
+millions of blocks.
 
-## 为什么要走 VTM 解码器
+## Why Go Through the VTM Decoder
 
-`.bin` 是 CABAC 熵编码的，**只有 VTM 解码器能还原划分树**（labelCtu 当年也是这么来的）。
-所以本模块的分工是：
+The `.bin` files are CABAC entropy-coded, and **only the VTM decoder can recover the partition tree**
+(this is also how labelCtu was produced). The work is therefore split as follows:
 
-- **熵解码**：VTM `DecoderApp` 完成，附带一个采样 dump 钩子
-  `source/Lib/DecoderLib/MttLabelDumper.*`（打 `#MTTDUMP` 标，**默认关闭、零开销**）。
-- **编排 + 采样计划 + 落盘**：本模块 `mttLabelBuilder`（C++）+ 函数库 `libs/MttSampleLib`。
+- **Entropy decoding**: done by VTM's `DecoderApp`, with a sampling dump hook
+  `source/Lib/DecoderLib/MttLabelDumper.*` (tagged `#MTTDUMP`, **off by default, zero overhead**).
+- **Orchestration + sampling plan + writing to disk**: this module's `mttLabelBuilder` (C++) plus the
+  library `libs/MttSampleLib`.
 
-> 整流解码是必须的（块之间有依赖，不能只解一个块），但很快（bin 才几 MB）。
-> 真正要省的是数据量——所以在 dump 那一步按比例只写一小部分。
+> Decoding the full stream is unavoidable (blocks depend on each other, so a single block cannot be
+> decoded on its own), but it is fast (the bins are only a few MB). What needs to be saved is data
+> volume — so the dump step writes only a fraction of the nodes.
 
-## 输出
+## Output
 
-每个 `(序列, QP)` 一个 CSV：`Data/labelMtt/<seq>_QP<qp>.csv`，列：
+One CSV per `(sequence, QP)`: `Data/labelMtt/<seq>_QP<qp>.csv`, with columns:
 
 ```
 sequence, POC_ID, pos_x, pos_y, w, h, qtDepth, mttDepth, splitMode, QP
 ```
 
-- 一行 = 一个 **MTT 阶段节点**（QT 叶子及其下的每个 BT/TT 决策节点，即非 QUAD 节点）。
-- `splitMode ∈ {NO, BTH, BTV, TTH, TTV}`：该块自身的划分决策
-  （NO=不再分；BTH/BTV=二叉横/竖；TTH/TTV=三叉横/竖）。
-- 只采亮度；跳过越过图像边界的隐式强制划分（不是真正的决策）。
-- **MTT 划分逐 QP 不同**，所以按 (序列,QP) 分文件、带 QP 列，不像 labelCtu 那样 4 QP 合一行。
+- One row = one **MTT-stage node** (a QT leaf and every BT/TT decision node below it, i.e. non-QUAD nodes).
+- `splitMode ∈ {NO, BTH, BTV, TTH, TTV}`: the block's own split decision
+  (NO = no further split; BTH/BTV = binary horizontal/vertical; TTH/TTV = ternary horizontal/vertical).
+- Luma only; implicit forced splits at picture boundaries are skipped (they are not real decisions).
+- **MTT partitions differ per QP**, so files are split by (sequence, QP) and carry a QP column, unlike
+  labelCtu, which puts all 4 QPs in one row.
 
-这是个**超集**：既能训「MTT 深度封顶」（用 mttDepth），也能训「逐节点 5 路模式」（用 splitMode），
-后期换预测目标不用重解。
+This is a **superset**: it supports training an "MTT depth cap" (using mttDepth) as well as a
+"per-node 5-way mode" (using splitMode), so changing the prediction target later does not require
+decoding again.
 
-## 用法
+## Usage
 
 ```bash
-# 根目录一键（自动构建带 #MTTDUMP 的 DecoderApp + 本编排器，再解码采样）
+# One command from the repo root (builds the DecoderApp with #MTTDUMP + this orchestrator, then decodes and samples)
 make mttLabel
 
-# 或在本子项目里：
+# Or inside this sub-project:
 cd yuvFeatureExtract
-make mtt-label                       # 同上
-# 手动指定解码器/目录：
+make mtt-label                       # same as above
+# Specify the decoder / directories manually:
 build/mttLabel/mttLabelBuilder mttLabel/config/mtt.yaml \
-    --decoder /路径/DecoderAppStatic --bin-dir /路径/binEncode202 --out-dir /路径/labelMtt
-build/mttLabel/mttLabelBuilder mttLabel/config/mtt.yaml --dry-run   # 只打印将执行的命令
+    --decoder /path/to/DecoderAppStatic --bin-dir /path/to/binEncode202 --out-dir /path/to/labelMtt
+build/mttLabel/mttLabelBuilder mttLabel/config/mtt.yaml --dry-run   # only print the commands that would run
 ```
 
-## 采样参数（改 `config/mtt.yaml`）
+## Sampling Parameters (edit `config/mtt.yaml`)
 
-| 键 | 含义 | 默认 |
-|----|------|------|
-| `poc_count`   | 每序列随机采的 POC 个数（≤0=全部 POC） | 8 |
-| `block_ratio` | 每个 MTT 节点被写出的概率 0~1 | 0.03 |
-| `random_seed` | 采样种子（结果可复现） | 42 |
-| `qps`         | 每序列要解码的基础 QP | 22,27,32,37 |
-| `bin_dir` / `out_dir` / `bin_suffix` | 输入码流目录 / 输出目录 / bin 命名后缀 | 见 yaml |
+| Key | Meaning | Default |
+|-----|---------|---------|
+| `poc_count`   | Number of random POCs sampled per sequence (≤ 0 = all POCs) | 8 |
+| `block_ratio` | Probability (0–1) that each MTT node is written out | 0.03 |
+| `random_seed` | Sampling seed (reproducible results) | 42 |
+| `qps`         | Base QPs to decode for each sequence | 22,27,32,37 |
+| `bin_dir` / `out_dir` / `bin_suffix` | Input bitstream directory / output directory / bin file-name suffix | see yaml |
 
-采样在解码器侧用 `(seed,poc,x,y,w,h)` 哈希做，确定性、与解码顺序无关；同一序列的各 QP 用同一组 POC，便于对照。
+Sampling is done on the decoder side by hashing `(seed,poc,x,y,w,h)`, so it is deterministic and
+independent of decoding order; all QPs of the same sequence use the same set of POCs for easy comparison.
 
-## 解码器环境变量（`#MTTDUMP`，编排器自动设好）
+## Decoder Environment Variables (`#MTTDUMP`, set automatically by the orchestrator)
 
-`MTT_DUMP_OUT`（输出路径，未设→关闭）、`MTT_DUMP_SEQ`、`MTT_DUMP_QP`、
-`MTT_DUMP_POCS`（逗号 POC 列表，空=全部）、`MTT_DUMP_BLOCK_RATIO`、`MTT_DUMP_SEED`。
-**不设 `MTT_DUMP_OUT` 时解码行为与原版完全一致。**
+`MTT_DUMP_OUT` (output path; unset → disabled), `MTT_DUMP_SEQ`, `MTT_DUMP_QP`,
+`MTT_DUMP_POCS` (comma-separated POC list, empty = all), `MTT_DUMP_BLOCK_RATIO`, `MTT_DUMP_SEED`.
+**Without `MTT_DUMP_OUT`, the decoder behaves exactly like the original.**
 
-## 后续
+## Next Steps
 
-`libs/MttSampleLib` 的采样口径会被复用：下一步针对采到的（变尺寸、矩形）MTT block
-提取 YUV 空域特征（含方向性特征），喂入 MTT 预测模型。
+The sampling scheme in `libs/MttSampleLib` is reused downstream: the sampled (variable-size,
+rectangular) MTT blocks get YUV spatial features (including directional features) extracted and are
+fed into the MTT prediction model — see [`../mttFeature/README.md`](../mttFeature/README.md).

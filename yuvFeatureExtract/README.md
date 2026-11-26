@@ -1,74 +1,93 @@
-# yuvFeatureExtract —— YUV 特征采集 + 标签合并（C++）
+# yuvFeatureExtract — YUV Feature Collection + Label Merging (C++)
 
-两件事都用 C++ 做，下游只需一个 Python 环境（modelTrain）：
-1. **采集**：从原始 YUV 提取 128×128 CTU 的 18 个**空域特征** → 中间件 `tempYuvFeature`。
-2. **合并**：把特征与 `labelCtu` 的 QT 深度标签按 `(POC_ID,pos_x,pos_y)` 合并 → `Training.csv`。
+Both steps are done in C++, so downstream only needs one Python environment (modelTrain):
+1. **Collect**: extract 18 **spatial features** for each 128×128 CTU from raw YUV → intermediate `tempYuvFeature`.
+2. **Merge**: join the features with the QT depth labels in `labelCtu` on `(POC_ID,pos_x,pos_y)` → `Training.csv`.
 
-## 目录结构
+The MTT-side modules live here as well: [`mttLabel/`](mttLabel/README.md) (sampled MTT partition labels)
+and [`mttFeature/`](mttFeature/README.md) (block-level features for the MTT training set).
+
+## Directory Layout
 
 ```
 yuvFeatureExtract/
-├── CMakeLists.txt          顶层（聚合 libs / collector / merger）
-├── Makefile                make 启动（包装 cmake）
-├── libs/                   自建函数库（单独文件夹）
-│   ├── MiniYaml/             极简 YAML 子集解析（无外部依赖）
-│   ├── SpatialFeatureLib/    空域特征：矩、Sobel/Laplacian、Levene/Kruskal-Wallis
-│   └── YuvGrayLib/           灰度图像矩阵：读YUV、位深转换、CTU分割、无用帧检测
-├── collector/             采集子项目：YUV → 特征中间件
+├── CMakeLists.txt          top level (aggregates libs / collector / merger / mttLabel / mttFeature)
+├── Makefile                make entry point (wraps cmake)
+├── libs/                   in-house libraries (each in its own folder)
+│   ├── MiniYaml/             minimal YAML-subset parser (no external dependencies)
+│   ├── SpatialFeatureLib/    spatial features: moments, Sobel/Laplacian, Levene/Kruskal-Wallis
+│   ├── YuvGrayLib/           grayscale image matrix: YUV reading, bit-depth conversion, CTU tiling, useless-frame detection
+│   ├── MttSampleLib/         sampling plan shared by the MTT label exporter
+│   └── MttFeatureLib/        pure functions for the MTT block features
+├── collector/              collection sub-project: YUV → intermediate features
 │   ├── src/main.cpp
-│   └── config/config.yaml   示例配置
-└── merger/                合并子项目：特征 × 标签 → Training.csv
-    └── src/main.cpp
+│   └── config/config.yaml    example configuration
+├── merger/                 merge sub-project: features × labels → Training.csv
+│   └── src/main.cpp
+├── mttLabel/               MTT partition label export (see mttLabel/README.md)
+└── mttFeature/             MTT block features → TrainingMtt.csv (see mttFeature/README.md)
 ```
 
-## 构建与运行
+## Build and Run
 
 ```bash
 cd yuvFeatureExtract
-make            # 配置并编译（Release）
+make            # configure and build (Release)
 
-make run        # ① 采集：YUV → Data/temp/tempYuvFeature（用 collector/config/config.yaml）
-make merge      # ② 合并：特征 × labelCtu → Data/TrainingData/Training.csv
-make data       # ①+② 一条龙
+make run        # ① collect: YUV → Data/temp/tempYuvFeature (uses collector/config/config.yaml)
+make merge      # ② merge: features × labelCtu → Data/TrainingData/Training.csv
+make data       # ① + ② in one go
 
-# 合并相关可覆盖：是否保留每序列中间表（默认 yes）
+# Merge option: keep the per-sequence intermediate tables or not (default yes)
 make merge KEEP=no
-# 自定义路径：
+# Custom paths:
 make merge LABELS=/path FEATURES=/path TRAINING=/path/Training.csv TEMP_MERGED=/path
 ```
 
-合并产物：`Data/TrainingData/` 下**只放 `Training.csv`**（已去掉含 NaN 的行）；
-每序列中间表放到 `Data/temp/trainMerged/`（`KEEP=no` 时删除）。
+Merge output: `Data/TrainingData/` holds **only `Training.csv`** (rows containing NaN already removed);
+per-sequence intermediate tables go to `Data/temp/trainMerged/` (deleted when `KEEP=no`).
 
-合并时还会**仿照 VTM-VVC 计算 QP-value** 并加入 4 列 `22QP,27QP,32QP,37QP`：
-按 RA 默认 GOP=32，由 `POC%32` 推出时域层 TID，再由 (基础QP, TID) 得到该 CTU 所在帧的实际 slice QP
-（与解码出的 PocInfo 一致，如 POC0→19/24/29/34）。列顺序：键 → 4个qt_max → 4个QP → 18个特征。
+The merge step also **computes the QP-value the way VTM-VVC does** and adds 4 columns `22QP,27QP,32QP,37QP`:
+with the RA default GOP=32, the temporal layer TID is derived from `POC%32`, and (base QP, TID) then
+gives the actual slice QP of the frame containing the CTU (consistent with the decoded PocInfo, e.g.
+POC0 → 19/24/29/34). Column order: keys → 4 qt_max → 4 QP → 18 features.
 
-需要 CMake ≥ 3.13 和支持 C++17 的编译器。
+Requires CMake ≥ 3.13 and a C++17 compiler.
 
-## 处理流程（每个序列）
+## Processing Steps (per sequence)
 
-1. **读灰度**：按 YAML 给的宽高/位深/色度格式，从裸 YUV 逐帧读取亮度分量（跳过色度）。
-2. **统一位深**：无论源是 8bit 还是 10bit，都左移到内部 10bit（对齐 VTM 默认）。`out = in << (10 - inputBitDepth)`。
-3. **确定帧数**：YAML 给了 `frames` 就用它，否则按文件大小 ÷ 每帧字节数推断。
-4. **排除无用帧（自动检测）**：
-   - 空白/近常量帧：全帧标准差 < `blank_std_threshold`；
-   - 重复帧：与前一有效帧的平均绝对差 < `duplicate_mad_threshold`。
-   - 检测在像素抽样（`detect_pixel_stride`）下进行以提速。被排除的帧索引会打印出来核对。
-5. **预估行数**：`可用帧数 × 每帧完整CTU数`（边缘不足 128 的 CTU 丢弃）。
-6. **采样**：每条样本独立地`随机选一帧 + 随机选一个CTU位置`，按 (帧, 位置) 去重，
-   直到达到 `ctu_per_yuv`（默认 10，可在序列里覆盖）。`random_seed` 保证可复现。
-7. **提特征**：对每个采样到的 128×128 块算 18 个空域特征，写一行。
-8. **（可选）时域残差特征 `res_*`**（`collect_residual: true`，默认开）：
-   - 取该块所在帧的 **L0 同位块**相减，算 `res_mean/res_std/res_skew/res_kurt`（4 列，接在 18 空域特征后）。
-   - **L0[0] 参考 POC = 去掉 POC 最低置位比特**（RA GOP32 二叉结构，已对照 cfg 核实：16→0、24→16、3→2…）。
-   - 残差需参考帧，故**自动排除 I 帧**（`POC % IntraPeriod == 0`）；IntraPeriod 默认按帧率取 ≥它的最小 `gop_size` 倍数，可用序列级 `intra_period:` 覆盖（应与编码时一致）。
-   - 排除 I 帧后训练集只含帧间块——这与 QT 模型**只在 inter slice 部署**一致。
-   - ⚠️ **一致性注意**：当前离线用的是 **源帧** L0；编码器在线用的是**重建参考帧** reco(L0)。
-     先用源帧验证「残差有没有用」(weighted-F1)；若有用、要嵌入时，需改用 `binEncode202` 解码出的重建帧做 L0 以对齐。
-9. **输出**：`<output_dir>/<name>.csv`，按 (POC, y, x) 排序。
+1. **Read luma**: using the width/height/bit depth/chroma format from the YAML, read the luma plane
+   frame by frame from the raw YUV (chroma is skipped).
+2. **Normalize bit depth**: whether the source is 8-bit or 10-bit, left-shift to an internal 10-bit
+   (matching the VTM default): `out = in << (10 - inputBitDepth)`.
+3. **Determine frame count**: use `frames` if the YAML provides it, otherwise infer it as file size ÷ bytes per frame.
+4. **Exclude useless frames (automatic detection)**:
+   - blank / near-constant frames: whole-frame standard deviation < `blank_std_threshold`;
+   - duplicate frames: mean absolute difference to the previous valid frame < `duplicate_mad_threshold`.
+   - Detection runs on a pixel subsample (`detect_pixel_stride`) for speed. Excluded frame indices are
+     printed for checking.
+5. **Estimate row count**: `usable frames × complete CTUs per frame` (edge CTUs smaller than 128 are dropped).
+6. **Sampling**: each sample independently picks a random frame and a random CTU position, deduplicated
+   by (frame, position), until `ctu_per_yuv` is reached (default 10, can be overridden per sequence).
+   `random_seed` makes it reproducible.
+7. **Extract features**: compute the 18 spatial features for each sampled 128×128 block and write one row.
+8. **(Optional) temporal residual features `res_*`** (`collect_residual: true`, on by default):
+   - Subtract the **co-located block in the L0 reference** of the block's frame and compute
+     `res_mean/res_std/res_skew/res_kurt` (4 columns, appended after the 18 spatial features).
+   - **L0[0] reference POC = POC with its lowest set bit cleared** (RA GOP32 dyadic structure, verified
+     against the cfg: 16→0, 24→16, 3→2, …).
+   - The residual needs a reference frame, so **I-frames are excluded automatically**
+     (`POC % IntraPeriod == 0`). IntraPeriod defaults to the smallest multiple of `gop_size` that is
+     ≥ the frame rate, and can be overridden per sequence with `intra_period:` (it should match the encoding setup).
+   - With I-frames excluded, the training set only contains inter blocks — consistent with the QT model
+     **being deployed on inter slices only**.
+   - ⚠️ **Consistency caveat**: offline collection currently uses the **source frame** as L0, whereas the
+     encoder uses the **reconstructed reference frame** reco(L0) online. The source frame is used first
+     to check whether the residual helps at all (weighted-F1); if it does and is to be embedded, L0
+     should switch to reconstructed frames decoded from `binEncode202` to stay aligned.
+9. **Output**: `<output_dir>/<name>.csv`, sorted by (POC, y, x).
 
-## 输出 CSV 列（21 列，对齐 128csv）
+## Output CSV Columns (21 columns, aligned with 128csv)
 
 ```
 POC_ID,pos_x,pos_y,
@@ -78,37 +97,41 @@ Lap_mean,Lap_std,Lap_skew,Lap_kurt,
 LeveneTest,KrusWTest,SobelLevene,SobelKrusW,LapLevene,LapKrusW
 ```
 
-- `POC_ID` 对裸 YUV 即**显示顺序的帧索引**。
-- 特征公式严格对齐项目原有 `w_cuProcess.cpp`：mean、std（总体）、skew=m3/σ³、kurt=m4/m2²、
-  Sobel=√(Gx²+Gy²)、Levene（四象限经典 W）、Kruskal-Wallis（简单秩）。
-- **Laplacian** 原 `w_cuProcess` 没有，这里用标准 4-邻域 3×3 核取绝对响应。
-  若要与旧 `128csv` 的生成脚本**逐值**对齐，请提供旧脚本的 Laplacian 核定义，我再调整。
+When `collect_residual` is enabled, the 4 `res_*` columns are appended after these.
 
-## 配置项（YAML）
+- For raw YUV, `POC_ID` is the **frame index in display order**.
+- Feature formulas strictly follow the project's original `w_cuProcess.cpp`: mean, std (population),
+  skew = m3/σ³, kurt = m4/m2², Sobel = √(Gx²+Gy²), Levene (classic W over four quadrants),
+  Kruskal-Wallis (simple ranks).
+- **Laplacian** did not exist in the original `w_cuProcess`; here it uses the standard 4-neighbour 3×3
+  kernel and takes the absolute response. Exact value-for-value parity with the legacy `128csv`
+  generator would require matching that script's Laplacian kernel definition.
 
-全局：`output_dir`、`ctu_size`、`internal_bitdepth`、`default_ctu_per_yuv`、`default_sample_ratio`、
-`random_seed`、`chroma_format`、`detect_useless_frames`、`blank_std_threshold`、
-`duplicate_mad_threshold`、`detect_pixel_stride`。
+## Configuration (YAML)
 
-每个序列（`sequences:` 列表）：必填 `path`/`width`/`height`/`bitdepth`；
-可选 `name`、`framerate`、`frames`（缺省按文件大小推断）、`chroma_format`、
-`ctu_per_yuv`（固定条数）、`sample_ratio`（按比例）。
+Global: `output_dir`, `ctu_size`, `internal_bitdepth`, `default_ctu_per_yuv`, `default_sample_ratio`,
+`random_seed`, `chroma_format`, `detect_useless_frames`, `blank_std_threshold`,
+`duplicate_mad_threshold`, `detect_pixel_stride`.
 
-**采样数量两种模式**（优先级从高到低）：
-1. 序列级 `sample_ratio`（>0）→ `ceil(预估可生成 × 比例)`
-2. 序列级 `ctu_per_yuv` → 固定条数
-3. 全局 `default_sample_ratio`（>0）→ 按比例
-4. 全局 `default_ctu_per_yuv` → 固定条数
+Per sequence (`sequences:` list): required `path`/`width`/`height`/`bitdepth`;
+optional `name`, `framerate`, `frames` (inferred from file size if absent), `chroma_format`,
+`ctu_per_yuv` (fixed count), `sample_ratio` (ratio).
 
-例：全局 `default_sample_ratio: 0.03` 让每个 YUV 采约 3%；
-某序列想固定 200 条，则在该序列加 `ctu_per_yuv: 200`（第 2 条优先于第 3 条）。
+**Two sampling modes** (highest priority first):
+1. per-sequence `sample_ratio` (> 0) → `ceil(estimated rows × ratio)`
+2. per-sequence `ctu_per_yuv` → fixed count
+3. global `default_sample_ratio` (> 0) → by ratio
+4. global `default_ctu_per_yuv` → fixed count
 
-见 `collector/config/config.yaml` 示例。
+Example: a global `default_sample_ratio: 0.03` samples about 3% of each YUV; to fix one sequence at
+200 rows, add `ctu_per_yuv: 200` to that sequence (rule 2 takes precedence over rule 3).
 
-## 自建函数库 API 速览
+See the example in `collector/config/config.yaml`.
 
-- `sf::computeCtuFeatures(const sf::Mat& block) -> CtuFeatures`（含 `csvHeader()` / `toCsvFields()`）
+## In-house Library API at a Glance
+
+- `sf::computeCtuFeatures(const sf::Mat& block) -> CtuFeatures` (with `csvHeader()` / `toCsvFields()`)
 - `sf::mean/stddev/skewness/kurtosis/sobel/laplacian/levene/kruskalWallis`
-- `yg::YuvReader`（读帧+位深转换）、`yg::GrayFrame::extractBlock`、
-  `yg::enumerateFullCtus`、`yg::detectUsableFrames`
+- `yg::YuvReader` (frame reading + bit-depth conversion), `yg::GrayFrame::extractBlock`,
+  `yg::enumerateFullCtus`, `yg::detectUsableFrames`
 - `myaml::parseFile` / `getInt/getDouble/getStr/getBool`

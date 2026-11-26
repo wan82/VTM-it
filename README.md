@@ -1,174 +1,213 @@
-# VTM-it —— VVC/VTM 快速 CU 划分研究工作区
+# VTM-it — Fast CU Partitioning Research Workspace for VVC/VTM
 
-围绕 H.266/VVC 参考软件 **VTM** 的快速 CU 划分（fast partitioning）研究：
-从原始 YUV 提取 CTU 的空域特征，配上从官方 VTM 解码得到的真实 QT 划分深度作标签，
-合成训练数据，用于训练「按特征预测 CTU 是否/如何划分」的模型，从而在编码时跳过部分
-RDO 搜索、以很小的 BD-rate 代价换取编码时间（ET）的下降。
+Research on fast CU partitioning for **VTM**, the H.266/VVC reference software.
+Spatial features are extracted per CTU from raw YUV, and the ground-truth QT partition depth
+obtained by decoding with the official VTM serves as the label. Together they form a training set
+for models that predict whether and how a CTU should be split, so the encoder can skip part of the
+RDO search and reduce encoding time (ET) at a small BD-rate cost.
 
-## 目录结构
+## Directory Layout
 
 ```
 VTM-it/
-├── Makefile                   总控：在根目录一站式调度两个子项目（无需 cd）
-├── VVCSoftware_VTM-VTM-20.2/   官方 VTM 20.2 参考软件（已加 arm64 构建支持）
-├── perSequenceCfg/           VTM 各测试序列的 .cfg（分辨率/位深/帧率/帧数等权威参数）
-├── Data/                       数据中心
-│   ├── binEncode202/            VTM-20.2 编出的 RA 码流(<seq>_RA_str<qp>.bin)，解码出 QT/MTT 标签
-│   ├── labelCtu/                标签：每序列一个 CSV，逐 CTU 的 4 个 QP 下 QT 最大深度(qt_max)
-│   ├── labelMtt/                标签：采样的 MTT 划分(每 序列×QP 一个 CSV，逐节点 w/h/mttDepth/splitMode)
-│   ├── temp/tempYuvFeature/     中间件：采集器输出的逐 CTU 空域特征(每序列一个 CSV)
-│   ├── temp/trainMerged/         中间件：每序列合并表（特征+标签）
-│   ├── TrainingData/Training.csv 最终训练集（只此一个文件）
-│   ├── Log/FastTest/             fastTest 编码日志
-│   ├── LogOriginalEnc/         原版编码日志（对照基线）
-│   └── ModelResults/             机器产物：qtForest.bin + models/<QP>.json（不放报告）
-├── Report/                      所有报告集中地（数据归 Data，报告归 Report）
-│   ├── ModelTraining/             训练报告：report.md + metrics.csv + figures/
-│   ├── Analysis/                  日志分析报告：analysis.md + bdSummary.csv
-│   ├── QTReport.md                项目报告：整体 pipeline
-│   └── QTReport_ConfGating.md     项目报告：置信度门控 + 双向早停 方法与对比
-├── yuvFeatureExtract/          子项目①(C++)：YUV→特征，并把特征×标签合并成 Training.csv
-├── modelTrain/                 子项目②(Python)：训练模型 + 出报告 + 产出 qtForest.bin
-├── logAnalyze/                 子项目③(Python)：BD-rate / Time-Reduction 日志分析
-├── .venv/                      所有 Python 子项目共用的虚拟环境（运行后生成）
-└── oldFashion/                 历史归档：早期内嵌原型 + 复盘文档 + 退役的 Python 合并器
+├── Makefile                    Top-level driver: runs every sub-project from the repo root (no cd needed)
+├── VVCSoftware_VTM-VTM-20.2/   Official VTM 20.2 reference software (+ arm64 build support and prediction hooks)
+├── perSequenceCfg/             Per-sequence VTM .cfg files (authoritative resolution / bit depth / frame rate / frame count)
+├── Data/                       Data hub
+│   ├── binEncode202/             RA bitstreams encoded by VTM-20.2 (<seq>_RA_str<qp>.bin); decoded to get QT/MTT labels  *
+│   ├── labelCtu/                 Labels: one CSV per sequence, per-CTU max QT depth (qt_max) at 4 QPs
+│   ├── labelMtt/                 Labels: sampled MTT partitions (one CSV per sequence×QP, per node w/h/mttDepth/splitMode)  *
+│   ├── temp/tempYuvFeature/      Intermediate: per-CTU spatial features from the collector (one CSV per sequence)  *
+│   ├── temp/trainMerged/         Intermediate: per-sequence merged tables (features + labels)  *
+│   ├── TrainingData/Training.csv Final training set (the only file here)  *
+│   ├── Log/FastTest/             fastTest encoding logs  *
+│   ├── LogOriginalEnc/           Encoding logs from the unmodified encoder (baseline)
+│   └── ModelResults/             Machine artifacts: qtForest.bin + models/<QP>.json (no reports)  *
+├── Report/                     All reports live here (data goes to Data/, reports go to Report/)
+│   ├── ModelTraining/            Training report: report.md + metrics.csv + figures/
+│   ├── Analysis/                 Log analysis report: analysis.md + bdSummary.csv
+│   ├── QTReport.md               Project report: the overall pipeline
+│   └── QTReport_ConfGating.md    Project report: confidence gating + bidirectional early termination, method and comparison
+├── yuvFeatureExtract/          Sub-project ① (C++): YUV → features, and merges features × labels into Training.csv
+├── modelTrain/                 Sub-project ② (Python): trains models, writes reports, produces qtForest.bin
+├── logAnalyze/                 Sub-project ③ (Python): BD-rate / Time-Reduction log analysis
+├── .venv/                      Virtual environment shared by all Python sub-projects (created on first run)  *
+└── oldFashion/                 Historical archive: early embedded prototypes + post-mortems + retired Python merger  *
 ```
 
-> **数据与报告分离**：`Data/` 只放数据/日志/模型 bin 等机器产物；`Report/` 集中放所有人读的报告。
-> 特征提取与标签合并都由 C++ 完成；两个 Python 子项目（modelTrain / logAnalyze）**共用一个
-> 虚拟环境 `VTM-it/.venv`**，各自按需安装依赖。
+`*` = generated locally or too large, so not tracked in this repository (see `.gitignore`).
+Everything marked this way can be regenerated with the `make` targets below, given the source YUVs.
 
-## 命名约定（文件名 vs 列名）
+> **Data and reports are kept separate**: `Data/` only holds machine artifacts such as data, logs and
+> model binaries; `Report/` collects every human-readable report.
+> Feature extraction and label merging are both done in C++. The two Python sub-projects
+> (modelTrain / logAnalyze) **share one virtual environment, `VTM-it/.venv`**, and each installs
+> only the dependencies it needs.
 
-本仓库刻意把**两种命名**分开，两者规则不同、不要混淆：
+## Naming Conventions (file names vs. column names)
 
-- **文件名 / 目录名 → 驼峰命名法（camelCase）。** 仓库自有的所有文件夹、源码、脚本、生成产物
-  都用驼峰，例如 `yuvFeatureExtract/`、`labelCtu/`、`tempYuvFeature/`、`perSequenceCfg/`、
-  `qtForest.bin`、`bdSummary.csv`、`featureWrapper.png`、`exportQtForest.py`，C++ 二进制
-  `yuvFeatureCollector` / `yuvLabelMerger`。**例外**：`VVCSoftware_VTM-VTM-20.2/`（官方 VTM 原名，
-  不改）与 `oldFashion/`（历史归档，不改）。
+This repository deliberately keeps **two naming schemes** apart. They follow different rules and
+should not be mixed up:
 
-- **CSV 列名 → 保持数据 schema 原样，不驼峰化。** `Training.csv` 的列名是训练/推理双方约定的
-  数据契约，C++ 采集器、合并器与 Python 训练侧都按这些字面量对齐，改了会两边脱节。因此保留：
-  `sequence, POC_ID, pos_x, pos_y`、4 个标签列 `22qt_max/27qt_max/32qt_max/37qt_max`、
-  4 个 QP-value 列 `22QP/27QP/32QP/37QP`，以及 18 个空域特征列（如 `Sobel_mean`、`Lap_std`）。
+- **File and directory names → camelCase.** Every folder, source file, script and generated artifact
+  owned by this repository uses camelCase, e.g. `yuvFeatureExtract/`, `labelCtu/`, `tempYuvFeature/`,
+  `perSequenceCfg/`, `qtForest.bin`, `bdSummary.csv`, `featureWrapper.png`, `exportQtForest.py`, and the
+  C++ binaries `yuvFeatureCollector` / `yuvLabelMerger`. **Exceptions**: `VVCSoftware_VTM-VTM-20.2/`
+  (the official VTM name, left unchanged) and `oldFashion/` (historical archive, left unchanged).
 
-- **当列名出现在生成文件名里时，列名优先、原样保留。** 少数产物的文件名内嵌了列名 token，
-  仍沿用列名写法而非驼峰，以便和 CSV 列一一对应：
-  - 每 QP 模型元数据：`Data/ModelResults/models/22qt_max.json`（…27/32/37）
-  - 混淆矩阵图：`Report/ModelTraining/figures/cm_22qt_max_RandomForest.png` 等
-    （命名模板为 `cm_<标签列名>_<模型名>.png`）
+- **CSV column names → kept exactly as in the data schema, not camelCased.** The column names of
+  `Training.csv` are a data contract between training and inference: the C++ collector, the merger
+  and the Python training code all match on these literal strings, so renaming them would break one
+  side. The following are therefore kept as-is: `sequence, POC_ID, pos_x, pos_y`, the 4 label columns
+  `22qt_max/27qt_max/32qt_max/37qt_max`, the 4 QP-value columns `22QP/27QP/32QP/37QP`, and the 18
+  spatial feature columns (e.g. `Sobel_mean`, `Lap_std`).
 
-  > 即「文件名外壳用驼峰，内嵌的列名 token 不动」。如果将来要连列名一起改，需同时改动
-  > C++ 采集/合并器、`train.py` 的 `LABEL_COLS/QP_VALUE_COLS`、以及 VTM 侧
-  > `QtForestPredictor` 的特征名匹配——属于跨语言的数据契约变更，不要只改单边。
+- **When a column name appears inside a generated file name, the column name wins and is kept
+  verbatim.** A few artifacts embed a column-name token in their file name; it keeps the column
+  spelling rather than camelCase so it maps one-to-one to the CSV column:
+  - Per-QP model metadata: `Data/ModelResults/models/22qt_max.json` (…27/32/37)
+  - Confusion matrix figures: `Report/ModelTraining/figures/cm_22qt_max_RandomForest.png`, etc.
+    (template: `cm_<labelColumn>_<modelName>.png`)
 
-## 端到端数据流
+  > In short: "the file-name shell is camelCase, embedded column-name tokens are untouched". Renaming
+  > the columns as well would require changing the C++ collector/merger, `LABEL_COLS/QP_VALUE_COLS` in
+  > `train.py`, and the feature-name matching in VTM's `QtForestPredictor` at the same time — a
+  > cross-language data-contract change, never a one-sided edit.
+
+## End-to-End Data Flow
 
 ```
-官方 VTM 20.2 解码  ──►  Data/labelCtu/          (真实 QT 深度标签, 全 CTU 覆盖)
-                                                     │
-YUV 原始序列 ─►[yuvFeatureExtract: 采集]─► Data/temp/tempYuvFeature/  (采样 CTU 的空域特征)
-                                                     │
-                       [yuvFeatureExtract: 合并] 按 (POC_ID,pos_x,pos_y) 内连接 + 去NaN
-                                                     ▼
-                                      Data/TrainingData/Training.csv
-                                                     │
-                              [modelTrain] 清洗→特征筛选→训练NB/DT/RF→GroupKFold(5)
-                                                     ▼
-                       模型bin → Data/ModelResults/ ；报告/混淆矩阵 → Report/ModelTraining/
+Official VTM 20.2 decode ──► Data/labelCtu/             (ground-truth QT depth labels, every CTU)
+                                                        │
+Raw YUV ─►[yuvFeatureExtract: collect]─► Data/temp/tempYuvFeature/  (spatial features of sampled CTUs)
+                                                        │
+                  [yuvFeatureExtract: merge] inner join on (POC_ID,pos_x,pos_y) + drop NaN
+                                                        ▼
+                                         Data/TrainingData/Training.csv
+                                                        │
+                       [modelTrain] clean → feature selection → train NB/DT/RF → GroupKFold(5)
+                                                        ▼
+              model bin → Data/ModelResults/ ; reports / confusion matrices → Report/ModelTraining/
 ```
 
-## 快速开始
+## Quick Start
 
-根目录有一个**总控 Makefile**，无需 cd 即可控制两个子项目：
+The repository root has a **top-level Makefile** that drives every sub-project without `cd`:
 
 ```bash
-# 在 VTM-it 根目录直接：
-make help        # 查看所有命令
-make extract     # 提取：YUV → 特征中间件(tempYuvFeature)
-make merge       # 汇总：特征 × labelCtu → Training.csv（含 QP-value）
+# From the VTM-it root:
+make help        # list all commands
+make extract     # extract: YUV → intermediate features (tempYuvFeature)
+make merge       # merge: features × labelCtu → Training.csv (with QP-values)
 make data        # = extract + merge
-make train       # 训练→模型bin→Data/ModelResults；报告→Report/ModelTraining
-make all         # data + train 全流程
-make clean       # 清理两个子项目的 build / venv
+make train       # train → model bin → Data/ModelResults; report → Report/ModelTraining
+make all         # data + train, full pipeline
+make clean       # clean the sub-projects' build outputs
+make distclean   # clean + remove the shared venv and training artifacts
 ```
 
-嵌入 VTM 后做端到端验证：
+End-to-end validation after embedding the models into VTM:
 
 ```bash
-make fastTest    # 编译VTM + 对BQSquare编码33帧(QP22/27/32/37)，日志→Data/Log/FastTest
-make analyze     # 对比 Data/LogOriginalEnc，算 BD-rate / Time-Reduction → Report/Analysis
+make fastTest    # build VTM + encode 33 frames of BQSquare (QP22/27/32/37), logs → Data/Log/FastTest
+make analyze     # compare against Data/LogOriginalEnc, compute BD-rate / Time-Reduction → Report/Analysis
 ```
 
-命令行参数会**自动透传**给子项目，例如：
+Command-line variables are **passed through automatically** to the sub-projects, for example:
 
 ```bash
-make merge KEEP=no                  # 合并后不保留每序列中间表
-make train CORR=0.9 TOPK=8          # 调特征筛选参数
-make fastTest YUV=/路径/BQSquare_416x240_60.yuv   # 指定 YUV
+make merge KEEP=no                                   # do not keep per-sequence intermediate tables
+make train CORR=0.9 TOPK=8                           # tune feature-selection parameters
+make fastTest YUV=/path/to/BQSquare_416x240_60.yuv   # use a specific YUV
 ```
 
-各子项目仍可单独进入用 `make`（细节见各自的 `README.md`）。
+Each sub-project can still be run on its own with `make` inside its directory (see each one's `README.md`).
 
-## 嵌入 VTM 编码器（两套预测，正交、可分别开关）
+## Embedding into the VTM Encoder (two orthogonal predictors, independently switchable)
 
-训练出的两个模型都能直接嵌进官方 VTM 20.2 编码器，用环境变量开关：
+Both trained models can be plugged directly into the official VTM 20.2 encoder and are switched on
+via environment variables:
 
-- **QT 早停**（`qtForest.bin`，`#QTPRED`）：CTU 根预测 QT 最大深度 + 双向早停 + 置信度门控。
-  详见 `VVCSoftware_VTM-VTM-20.2/QTPRED.md`。
-- **MTT 方向剪枝**（`mttForest.bin`，`#MTTPRED`）：在能做 BT/TT 的节点预测 splitMode，确信时剪掉相悖方向的
-  BT/TT（不动 QUAD/不划分）。详见 `VVCSoftware_VTM-VTM-20.2/MTTPRED.md`。
+- **QT early termination** (`qtForest.bin`, `#QTPRED`): predicts the maximum QT depth at the CTU root,
+  with bidirectional early termination and confidence gating.
+  See [`VVCSoftware_VTM-VTM-20.2/QTPRED.md`](VVCSoftware_VTM-VTM-20.2/QTPRED.md).
+- **MTT direction pruning** (`mttForest.bin`, `#MTTPRED`): at nodes where BT/TT is allowed, predicts
+  the splitMode and, when confident, prunes the BT/TT splits in the opposing direction (QUAD and
+  no-split are never touched). See [`VVCSoftware_VTM-VTM-20.2/MTTPRED.md`](VVCSoftware_VTM-VTM-20.2/MTTPRED.md).
 
 ```bash
-export QT_FOREST_MODEL=$(pwd)/Data/ModelResults/qtForest.bin    # 开 QT 早停
-export MTT_FOREST_MODEL=$(pwd)/Data/ModelResults/mttForest.bin  # 开 MTT 剪枝（可单开/同开）
+export QT_FOREST_MODEL=$(pwd)/Data/ModelResults/qtForest.bin    # enable QT early termination
+export MTT_FOREST_MODEL=$(pwd)/Data/ModelResults/mttForest.bin  # enable MTT pruning (either or both)
 ./VVCSoftware_VTM-VTM-20.2/build/.../EncoderAppStatic -c <RA cfg> -c <seq cfg> -q 32 ...
 ```
 
-两套 C++ 推理都与训练侧**逐样本/逐元素一致**（特征字节级一致、森林遍历与 sklearn `predict` 一致）；
-不设对应环境变量即为原版行为。
+Both C++ inference paths match the training side **sample-for-sample / element-for-element**
+(features are byte-identical, and forest traversal agrees with sklearn `predict`).
+With the corresponding environment variable unset, the encoder behaves exactly like the original.
 
-## 子项目说明
+## Sub-projects
 
-### yuvFeatureExtract（C++，CMake + Makefile，按模块运行）
-- **采集**（`make extract`）：从裸 YUV 读灰度、统一转 10bit、切 128×128 CTU（丢边缘），提取与
-  既有 `128csv` 对齐的 **18 个空域特征**；支持 YAML 逐序列配置、自动排除无用帧、按「固定条数/比例」采样。
-- **合并**（`make merge`）：把特征与 `labelCtu` 标签按 `(POC_ID,pos_x,pos_y)` 内连接、去掉含 NaN 的行，
-  生成 `Data/TrainingData/Training.csv`；每序列中间表放 `Data/temp/trainMerged/`
-  （`make merge KEEP=no` 可不保留中间表）。还会仿照 VTM(RA, GOP=32) 由 POC 推出 4 个基础 QP
-  下的实际 slice QP，加入 `22QP/27QP/32QP/37QP` 四列。
-  Training.csv 列：`sequence,POC_ID,pos_x,pos_y, 4×qt_max, 4×QP, 18×特征`（共 30 列）。
-- **MTT 标签**（`make mttLabel`）：解码 `Data/binEncode202/` 的 RA 码流，按「随机 POC × 随机 block」
-  采样导出 MTT 划分标签 → `Data/labelMtt/<seq>_QP<qp>.csv`（逐节点 `w/h/qtDepth/mttDepth/splitMode`）。
-  熵解码走 VTM 解码器（`#MTTDUMP` 钩子，默认零开销），编排/采样在 `mttLabel/` 模块。详见
-  `yuvFeatureExtract/mttLabel/README.md`。
-- **MTT 特征**（`make mttFeature`）：给 labelMtt 的每个块配空域特征（②方向性 + ③划分代价代理 +
-  ④形状/QP，块所在 CTU 的 ①复杂度作上下文）→ `Data/TrainingData/TrainingMtt.csv`。详见
-  `yuvFeatureExtract/mttFeature/README.md`。
-- 自建函数库在 `libs/`（MiniYaml/YuvGrayLib/SpatialFeatureLib/**MttSampleLib/MttFeatureLib**），
-  采集器在 `collector/`，合并器在 `merger/`，MTT 标签编排在 `mttLabel/`，MTT 特征在 `mttFeature/`。
+### yuvFeatureExtract (C++, CMake + Makefile, run per module)
+- **Collect** (`make extract`): reads luma from raw YUV, normalizes to 10-bit, tiles 128×128 CTUs
+  (dropping incomplete edge CTUs), and extracts **18 spatial features** aligned with the existing
+  `128csv` format. Supports per-sequence YAML configuration, automatic exclusion of useless frames,
+  and sampling by fixed count or by ratio.
+- **Merge** (`make merge`): inner-joins features with the `labelCtu` labels on `(POC_ID,pos_x,pos_y)`,
+  drops rows containing NaN, and writes `Data/TrainingData/Training.csv`; per-sequence intermediate
+  tables go to `Data/temp/trainMerged/` (`make merge KEEP=no` discards them). Following VTM (RA, GOP=32),
+  it also derives from the POC the actual slice QP under each of the 4 base QPs and adds the columns
+  `22QP/27QP/32QP/37QP`.
+  Training.csv columns: `sequence,POC_ID,pos_x,pos_y, 4×qt_max, 4×QP, 18×features` (30 columns).
+- **MTT labels** (`make mttLabel`): decodes the RA bitstreams in `Data/binEncode202/` and exports MTT
+  partition labels sampled as "random POC × random block" → `Data/labelMtt/<seq>_QP<qp>.csv`
+  (per node: `w/h/qtDepth/mttDepth/splitMode`). Entropy decoding runs inside the VTM decoder
+  (`#MTTDUMP` hook, zero overhead by default); orchestration and sampling live in the `mttLabel/`
+  module. See [`yuvFeatureExtract/mttLabel/README.md`](yuvFeatureExtract/mttLabel/README.md).
+- **MTT features** (`make mttFeature`): attaches spatial features to every block in labelMtt
+  (② directionality + ③ split-cost proxies + ④ shape/QP, with ① complexity of the enclosing CTU as
+  context) → `Data/TrainingData/TrainingMtt.csv`.
+  See [`yuvFeatureExtract/mttFeature/README.md`](yuvFeatureExtract/mttFeature/README.md).
+- In-house libraries are in `libs/` (MiniYaml / YuvGrayLib / SpatialFeatureLib / **MttSampleLib /
+  MttFeatureLib**); the collector is in `collector/`, the merger in `merger/`, MTT label orchestration
+  in `mttLabel/`, and MTT features in `mttFeature/`.
 
-### modelTrain（Python，Makefile + venv）
-- **QT**（`make train`，`train.py`）：读 `Training.csv`，数据清洗 + 特征筛选，按 QP 分别训练
-  **朴素贝叶斯/决策树/随机森林**（多分类 qt_max 0–4），**GroupKFold(5, 按序列)** 评估，
-  输出完整报告 + 12 张混淆矩阵，训练时**直接产出** `qtForest.bin`（每 QP 元数据 `models/<qp>.json`）。
-- **MTT**（`make trainMtt`，`trainMtt.py`）：与 QT 分开的独立模型。读 `TrainingMtt.csv`，预测每个 MTT
-  节点的 **splitMode 5 分类**（NO/BTH/BTV/TTH/TTV），按 QP 分 4 模型，balanced 权重 + macro-F1，
-  直接产出 `mttForest.bin`（与 qtForest.bin 同一 bin 格式，C++ 可读）。报告在 `Report/MttTraining`。
+### modelTrain (Python, Makefile + venv)
+- **QT** (`make train`, `train.py`): reads `Training.csv`, performs data cleaning and feature selection,
+  and trains **Naive Bayes / Decision Tree / Random Forest** separately per QP (multi-class qt_max 0–4),
+  evaluated with **GroupKFold(5, grouped by sequence)**. Outputs a full report plus 12 confusion
+  matrices, and **directly produces** `qtForest.bin` during training (per-QP metadata in `models/<qp>.json`).
+- **MTT** (`make trainMtt`, `trainMtt.py`): a separate model, independent of QT. Reads `TrainingMtt.csv`
+  and predicts the **5-class splitMode** (NO/BTH/BTV/TTH/TTV) of each MTT node, with 4 models (one per QP),
+  balanced weights and macro-F1. Directly produces `mttForest.bin` (same bin format as `qtForest.bin`,
+  readable from C++). Reports are in `Report/MttTraining`.
 
-## 关于 VTM 参考软件
+### logAnalyze (Python, Makefile + shared venv)
+- **Analysis** (`make analyze`): aligns fastTest logs with the baseline logs POC by POC and computes
+  Bjøntegaard BD-rate and Time-Reduction → `Report/Analysis`.
+  See [`logAnalyze/README.md`](logAnalyze/README.md).
 
-`VVCSoftware_VTM-VTM-20.2/` 是未改动的官方版本，只在 3 个 CMakeLists 里加了
-`NOT (CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")` 判断，使其能在 Apple Silicon 上以标量回退构建。
-`perSequenceCfg/` 提供各序列的官方编码参数（采集器 config 中的宽高/位深/帧数即据此填写）。
+## About the VTM Reference Software
 
-## oldFashion（历史归档）
+`VVCSoftware_VTM-VTM-20.2/` is based on the official release. Two kinds of changes were made:
 
-早期把预测器**直接嵌进编码器**的两版原型已归档于此，仅作参考：
-- `VTM_VVC_128/`：VTM 20.0，离线 CSV 查表喂划分结果（脆弱、大序列易崩）。
-- `VTM-GOP/`：VTM 20.2，编码器内实时特征 + 朴素贝叶斯预测（含一个残差特征失效的 bug）。
-- `VTM加速框架_问题清单.md` / `VTM加速框架_修复记录.md`：两版的致命问题复盘与修复记录。
+- **Build**: an `NOT (CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")` check added in 3 CMakeLists files so it
+  builds on Apple Silicon with the scalar fallback.
+- **Research hooks**, each tagged in the source and inactive unless its environment variable is set:
+  `#QTPRED` (`QtForestPredictor`), `#MTTPRED` (`MttForestPredictor`) in the encoder, and `#MTTDUMP`
+  (`MttLabelDumper`) in the decoder.
 
-当前工作流改为「**离线解耦**」：特征/标签都在编码器外离线生成，便于干净地训练与验证，
-规避了早期内嵌方案的崩溃与训练/推理特征不一致问题。
+`perSequenceCfg/` provides the official encoding parameters for each sequence (the width/height/bit
+depth/frame count in the collector config are filled in from these).
+
+## oldFashion (historical archive, not tracked in this repository)
+
+The two early prototypes that embedded the predictor **directly inside the encoder** are archived
+locally for reference only:
+- `VTM_VVC_128/`: VTM 20.0, fed partition decisions from an offline CSV lookup (fragile, crashed on large sequences).
+- `VTM-GOP/`: VTM 20.2, real-time in-encoder features + Naive Bayes prediction (contained a bug that
+  disabled the residual features).
+- Post-mortem and fix-log documents for the fatal issues in both versions.
+
+The current workflow is **offline and decoupled**: features and labels are generated offline,
+outside the encoder, which allows clean training and validation and avoids the crashes and the
+training/inference feature mismatch of the early embedded approach.
